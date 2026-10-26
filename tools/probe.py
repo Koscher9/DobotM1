@@ -19,11 +19,12 @@ from dobot.logger import FrameLogger  # noqa: E402
 from dobot.protocol import (  # noqa: E402
     CMD_ALARMS,
     CMD_GET_POSE,
-    alarm_byte8,
-    describe_alarm_byte8,
+    nonzero_alarm_bytes,
     pack_dobot_cmd,
     parse_frame,
+    parse_frames,
     unpack_pose,
+    unpack_alarms,
 )
 
 try:
@@ -46,9 +47,10 @@ def tcp_check(host: str, port: int, timeout: float) -> dict:
 
 async def collect_frames(ws, seconds: float) -> list[bytes]:
     frames: list[bytes] = []
-    deadline = asyncio.get_event_loop().time() + seconds
-    while asyncio.get_event_loop().time() < deadline:
-        remaining = deadline - asyncio.get_event_loop().time()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + seconds
+    while loop.time() < deadline:
+        remaining = deadline - loop.time()
         if remaining <= 0:
             break
         try:
@@ -79,11 +81,49 @@ def summarize_frame(raw: bytes) -> dict:
     return summary
 
 
+def summarize_messages(messages: list[bytes]) -> list[dict]:
+    summaries = []
+    for raw in messages:
+        frames = parse_frames(raw)
+        if frames:
+            summaries.extend(summarize_frame(frame.raw) for frame in frames)
+        else:
+            summaries.append(summarize_frame(raw))
+    return summaries
+
+
+def find_response(messages: list[bytes], cmd_id: int):
+    for raw in messages:
+        for frame in parse_frames(raw):
+            if frame.cmd_id == cmd_id:
+                return frame
+    return None
+
+
 async def probe(uri: str, listen_s: float, logger: FrameLogger) -> dict:
     report: dict = {"uri": uri, "steps": []}
-    parsed = urlparse(uri)
+    try:
+        parsed = urlparse(uri)
+    except ValueError as exc:
+        report["steps"].append({"step": "uri", "ok": False, "error": str(exc)})
+        report["ok"] = False
+        report["failed_at"] = "uri"
+        return report
     host = parsed.hostname or ""
-    port = parsed.port or 80
+    try:
+        port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    except ValueError as exc:
+        report["steps"].append({"step": "uri", "ok": False, "error": str(exc)})
+        report["ok"] = False
+        report["failed_at"] = "uri"
+        return report
+    if parsed.scheme not in ("ws", "wss") or not host or not 1 <= port <= 65535:
+        report["steps"].append(
+            {"step": "uri", "ok": False, "error": "URI muss ws:// oder wss:// mit gültigem Host/Port sein"}
+        )
+        report["ok"] = False
+        report["failed_at"] = "uri"
+        return report
 
     tcp = tcp_check(host, port, CONNECT_TIMEOUT_S)
     report["steps"].append({"step": "tcp", **tcp})
@@ -125,7 +165,7 @@ async def probe(uri: str, listen_s: float, logger: FrameLogger) -> dict:
                 "step": "idle_listen",
                 "ok": True,
                 "count": len(idle),
-                "frames": [summarize_frame(raw) for raw in idle],
+                "frames": summarize_messages(idle),
             }
         )
 
@@ -135,21 +175,23 @@ async def probe(uri: str, listen_s: float, logger: FrameLogger) -> dict:
         pose_frames = await collect_frames(ws, COMMAND_TIMEOUT_S)
         for raw in pose_frames:
             logger.log_rx(raw)
-        pose_match = None
-        for raw in pose_frames:
-            frame = parse_frame(raw)
-            if frame and frame.cmd_id == CMD_GET_POSE:
-                pose_match = frame
-                break
+        pose_match = find_response(pose_frames, CMD_GET_POSE)
+        pose = unpack_pose(pose_match.payload) if pose_match and pose_match.checksum_ok else None
         pose_step = {
             "step": "cmd_10_pose",
-            "ok": pose_match is not None,
-            "incoming": [summarize_frame(raw) for raw in pose_frames],
+            "ok": pose is not None,
+            "incoming": summarize_messages(pose_frames),
         }
         if pose_match:
-            pose = unpack_pose(pose_match.payload)
             pose_step["pose"] = pose.as_dict() if pose else None
             pose_step["checksum_ok"] = pose_match.checksum_ok
+            if not pose_match.checksum_ok:
+                pose_step["error"] = "ungültige Prüfsumme in CMD-10-Antwort"
+            elif pose is None:
+                pose_step["error"] = (
+                    f"ungültige Pose-Payload: erwartet 32 endliche Datenbytes, "
+                    f"erhalten {len(pose_match.payload)}"
+                )
         else:
             pose_step["error"] = "keine CMD-10-Antwort"
         report["steps"].append(pose_step)
@@ -160,22 +202,40 @@ async def probe(uri: str, listen_s: float, logger: FrameLogger) -> dict:
         alarm_frames = await collect_frames(ws, COMMAND_TIMEOUT_S)
         for raw in alarm_frames:
             logger.log_rx(raw)
-        alarm_match = None
-        for raw in alarm_frames:
-            frame = parse_frame(raw)
-            if frame and frame.cmd_id == CMD_ALARMS:
-                alarm_match = frame
-                break
+        alarm_match = find_response(alarm_frames, CMD_ALARMS)
+        alarms = (
+            unpack_alarms(alarm_match.payload)
+            if alarm_match and alarm_match.checksum_ok
+            else None
+        )
         alarm_step = {
             "step": "cmd_20_alarms",
-            "ok": alarm_match is not None,
-            "incoming": [summarize_frame(raw) for raw in alarm_frames],
+            "ok": alarms is not None,
+            "incoming": summarize_messages(alarm_frames),
         }
         if alarm_match:
-            byte8 = alarm_byte8(alarm_match.payload)
-            alarm_step["byte8"] = byte8
-            alarm_step["byte8_hex"] = f"0x{byte8:02X}"
-            alarm_step["meaning"] = describe_alarm_byte8(byte8)
+            alarm_step["checksum_ok"] = alarm_match.checksum_ok
+            if not alarm_match.checksum_ok:
+                alarm_step["error"] = "ungültige Prüfsumme in CMD-20-Antwort"
+            elif alarms is None:
+                alarm_step["error"] = (
+                    f"ungültige Alarm-Payload: erwartet 32 Bytes, "
+                    f"erhalten {len(alarm_match.payload)}"
+                )
+            else:
+                alarm_step["alarm_bytes"] = nonzero_alarm_bytes(alarms)
+                alarm_step["has_nonzero_alarm_bytes"] = any(alarms)
+                if any(alarms):
+                    alarm_step["motion_clearance"] = "unknown"
+                    alarm_step["warning"] = (
+                        "Nicht-null CMD-20-Rohdaten sind keine interpretierte "
+                        "Bewegungsfreigabe; Steuerungsanzeige prüfen."
+                    )
+                else:
+                    alarm_step["motion_clearance"] = "unknown"
+                    alarm_step["warning"] = (
+                        "Nullbytes allein bestätigen keine Bewegungsfreigabe."
+                    )
         else:
             alarm_step["error"] = "keine CMD-20-Antwort"
         report["steps"].append(alarm_step)
@@ -183,10 +243,13 @@ async def probe(uri: str, listen_s: float, logger: FrameLogger) -> dict:
         await ws.close()
         logger.log_disconnect("probe_done")
 
-    failed = next((step for step in report["steps"] if not step.get("ok", True)), None)
-    report["ok"] = failed is None
-    if failed:
-        report["failed_at"] = failed["step"]
+    failed_at = next(
+        (step.get("step") for step in report["steps"] if not step.get("ok", True)),
+        None,
+    )
+    report["ok"] = failed_at is None
+    if failed_at is not None:
+        report["failed_at"] = failed_at
     return report
 
 
@@ -195,6 +258,8 @@ def main() -> int:
     parser.add_argument("--uri", default=DOBOT_URI)
     parser.add_argument("--listen", type=float, default=1.0, help="Sekunden unaufgefordert zuhören")
     args = parser.parse_args()
+    if args.listen < 0:
+        parser.error("--listen muss mindestens 0 sein")
 
     log_path = ROOT / LOG_DIR / "probe.jsonl"
     logger = FrameLogger(log_path)

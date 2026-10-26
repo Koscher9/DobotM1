@@ -10,7 +10,7 @@ from tkinter import ttk
 from config import DOBOT_URI, JOG_ACCEL_RATIO, JOG_VELOCITY_RATIO, LOG_DIR, POSE_POLL_MS
 from dobot.client import DobotError, DobotThread
 from dobot.logger import FrameLogger
-from dobot.protocol import CARTESIAN_AXES, JOINT_AXES, describe_alarm_byte8
+from dobot.protocol import CARTESIAN_AXES, JOINT_AXES, nonzero_alarm_bytes
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -27,12 +27,13 @@ class JogApp(tk.Tk):
         self.robot.start()
 
         self._connected = False
+        self._connecting = False
         self._jogging = False
         self._poll_after: str | None = None
 
         self.uri_var = tk.StringVar(value=DOBOT_URI)
-        self.status_var = tk.StringVar(value="Getrennt")
-        self.alarm_var = tk.StringVar(value="Alarm: —")
+        self.status_var = tk.StringVar(value="Nicht verbunden — „Verbinden“ klicken")
+        self.alarm_var = tk.StringVar(value="Alarme: —")
         self.mode_var = tk.StringVar(value="joint")
         self.ratio_var = tk.DoubleVar(value=JOG_VELOCITY_RATIO)
         self.pose_vars = {
@@ -119,18 +120,29 @@ class JogApp(tk.Tk):
         button.bind("<ButtonRelease-1>", lambda _e: self._jog_stop())
 
     def _connect(self) -> None:
+        if self._connected or self._connecting:
+            return
         uri = self.uri_var.get().strip()
+        if not uri:
+            self.status_var.set("Bitte eine WebSocket-URI eingeben")
+            return
         self.robot.uri = uri
         self.robot.client.uri = uri
+        self._connecting = True
         self.status_var.set("Verbinde …")
 
         def done(fut: Future) -> None:
-            err = fut.exception()
+            err = fut.exception() if not fut.cancelled() else DobotError("Verbindung abgebrochen")
             self.after(0, lambda: self._on_connected(err))
 
-        self.robot.on_done(self.robot.client.connect(), done)
+        try:
+            self.robot.on_done(self.robot.client.connect(), done)
+        except DobotError as exc:
+            self._connecting = False
+            self.status_var.set(str(exc))
 
     def _on_connected(self, err: BaseException | None) -> None:
+        self._connecting = False
         if err is not None:
             self._connected = False
             self.status_var.set(f"Fehler: {err}")
@@ -140,11 +152,16 @@ class JogApp(tk.Tk):
         self._schedule_poll()
 
     def _disconnect(self) -> None:
+        if self._connecting:
+            self.status_var.set("Verbindung wird noch aufgebaut")
+            return
         self._stop_poll()
         self._connected = False
 
         def done(fut: Future) -> None:
-            self.after(0, lambda: self.status_var.set("Getrennt"))
+            err = fut.exception() if not fut.cancelled() else DobotError("Trennen abgebrochen")
+            message = f"Trennen fehlgeschlagen: {err}" if err else "Getrennt"
+            self.after(0, lambda: self.status_var.set(message))
 
         try:
             self.robot.on_done(self.robot.client.close(), done)
@@ -154,17 +171,22 @@ class JogApp(tk.Tk):
     def _e_stop(self) -> None:
         self._jogging = False
         try:
-            self.robot.submit(self.robot.client.emergency_stop())
+            self.robot.on_done(self.robot.client.emergency_stop(), self._report_command)
         except DobotError as exc:
             self.status_var.set(str(exc))
-        else:
-            self.status_var.set("Not-Halt gesendet")
+            return
+        self.status_var.set("NOT-HALT wird gesendet …")
 
     def _clear_alarms(self) -> None:
         try:
-            self.robot.submit(self.robot.client.clear_alarms())
+            self.robot.on_done(self.robot.client.clear_alarms(), self._report_command)
         except DobotError as exc:
             self.status_var.set(str(exc))
+
+    def _report_command(self, fut: Future) -> None:
+        err = fut.exception() if not fut.cancelled() else DobotError("Befehl abgebrochen")
+        message = f"Fehler: {err}" if err else "Befehl erfolgreich"
+        self.after(0, lambda: self.status_var.set(message))
 
     def _on_ratio(self, _value: str) -> None:
         ratio = float(self.ratio_var.get())
@@ -172,9 +194,12 @@ class JogApp(tk.Tk):
         if not self._connected:
             return
         try:
-            self.robot.submit(self.robot.client.set_jog_ratios(ratio, JOG_ACCEL_RATIO))
-        except DobotError:
-            pass
+            self.robot.on_done(
+                self.robot.client.set_jog_ratios(ratio, JOG_ACCEL_RATIO),
+                self._report_command,
+            )
+        except DobotError as exc:
+            self.status_var.set(str(exc))
 
     def _jog_start(self, axis_index: int, positive: bool) -> None:
         if not self._connected:
@@ -184,7 +209,7 @@ class JogApp(tk.Tk):
         self._jogging = True
 
         def done(fut: Future) -> None:
-            err = fut.exception()
+            err = fut.exception() if not fut.cancelled() else DobotError("Jog-Befehl abgebrochen")
             if err is not None:
                 self.after(0, lambda: self.status_var.set(str(err)))
 
@@ -198,9 +223,9 @@ class JogApp(tk.Tk):
         if not self._connected:
             return
         try:
-            self.robot.submit(self.robot.client.stop_jog())
-        except DobotError:
-            pass
+            self.robot.on_done(self.robot.client.stop_jog(), self._report_command)
+        except DobotError as exc:
+            self.status_var.set(str(exc))
 
     def _schedule_poll(self) -> None:
         self._stop_poll()
@@ -215,30 +240,44 @@ class JogApp(tk.Tk):
         if not self._connected:
             return
 
-        def pose_done(fut: Future) -> None:
+        async def read_status():
+            pose = await self.robot.client.get_pose()
+            alarms = await self.robot.client.get_alarms()
+            return pose, alarms
+
+        def status_done(fut: Future) -> None:
+            if fut.cancelled():
+                err = DobotError("Statusabfrage abgebrochen")
+                self.after(0, lambda error=err: self._on_status_error(error))
+                return
             err = fut.exception()
             if err is not None:
-                self.after(0, lambda: self.status_var.set(str(err)))
+                self.after(0, lambda error=err: self._on_status_error(error))
                 return
-            pose = fut.result()
-            self.after(0, lambda: self._apply_pose(pose))
-
-        def alarm_done(fut: Future) -> None:
-            if fut.exception() is not None:
-                return
-            alarms = fut.result()
-            byte8 = alarms[8] if len(alarms) > 8 else 0
-            self.after(0, lambda: self.alarm_var.set(f"Alarm: {describe_alarm_byte8(byte8)}"))
+            pose, alarms = fut.result()
+            self.after(0, lambda: self._apply_status(pose, alarms))
 
         try:
-            self.robot.on_done(self.robot.client.get_pose(), pose_done)
-            self.robot.on_done(self.robot.client.get_alarms(), alarm_done)
+            self.robot.on_done(read_status(), status_done)
         except DobotError as exc:
             self.status_var.set(str(exc))
             self._connected = False
+
+    def _apply_status(self, pose, alarms: bytes) -> None:
+        if not self._connected:
             return
+        self._apply_pose(pose)
+        self.alarm_var.set(f"CMD-20 Alarmbytes: {nonzero_alarm_bytes(alarms)}")
         self._poll_after = self.after(POSE_POLL_MS, self._poll)
 
+    def _on_status_error(self, error: BaseException) -> None:
+        if not self._connected:
+            return
+        self.status_var.set(str(error))
+        self.alarm_var.set("CMD-20 Alarmstatus unbekannt (Abfrage fehlgeschlagen)")
+        for value in self.pose_vars.values():
+            value.set("—")
+        self._poll_after = self.after(POSE_POLL_MS, self._poll)
     def _apply_pose(self, pose) -> None:
         values = pose.as_dict()
         for name, value in values.items():
@@ -248,8 +287,9 @@ class JogApp(tk.Tk):
         self._stop_poll()
         try:
             self.robot.stop()
-        except Exception:
-            pass
+        except Exception as exc:
+            if self.robot.logger:
+                self.robot.logger.log_error("ui_shutdown", str(exc))
         self.destroy()
 
 

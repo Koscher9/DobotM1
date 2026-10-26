@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from dobot.protocol import parse_frame
+from dobot.protocol import parse_frame, parse_frames
 
 
 class FrameLogger:
@@ -50,7 +50,19 @@ class FrameLogger:
             "hex": raw[:80].hex(" "),
         }
         if parsed is None:
-            event["parse_error"] = "not a dobot frame"
+            frames = parse_frames(raw)
+            if frames:
+                event["frames"] = [
+                    {
+                        "cmd_id": frame.cmd_id,
+                        "ctrl": frame.ctrl,
+                        "payload_len": len(frame.payload),
+                        "checksum_ok": frame.checksum_ok,
+                    }
+                    for frame in frames
+                ]
+            else:
+                event["parse_error"] = "not a dobot frame"
             return event
         event.update(
             {

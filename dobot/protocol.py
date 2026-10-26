@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import struct
 from dataclasses import dataclass
 
@@ -14,10 +15,6 @@ CMD_JOG_COMMON_PARAMS = 72
 CMD_JOG = 73
 CMD_FIRMWARE_MODE = 161
 CMD_QUEUED_CLEAR = 245
-
-ALARM_Z_LOWER_LIMIT = 0x20
-ALARM_STALL = 0x04
-ALARM_STALL_AND_LIMIT = 0x24
 
 # ProtocolJOGCmd (CMD 73): isJoint=1 joint space, isJoint=0 cartesian.
 JOG_STOP = 0
@@ -96,52 +93,70 @@ def parse_frame(raw: bytes) -> Frame | None:
     if raw[0] != 0xAA or raw[1] != 0xAA:
         return None
     data_len = raw[2]
+    if data_len < 2:
+        return None
     cmd_id = raw[3]
     ctrl = raw[4]
-    payload_len = max(data_len - 2, 0)
+    payload_len = data_len - 2
     expected = 5 + payload_len + 1
-    if len(raw) < expected:
-        payload = bytes(raw[5:-1]) if len(raw) > 5 else b""
-        checksum = raw[-1] if raw else 0
-        ok = False
-    else:
-        payload = bytes(raw[5 : 5 + payload_len])
-        checksum = raw[5 + payload_len]
-        ok = checksum == checksum_for(cmd_id, ctrl, payload)
+    if len(raw) != expected:
+        return None
+    payload = bytes(raw[5 : 5 + payload_len])
+    checksum = raw[5 + payload_len]
+    ok = checksum == checksum_for(cmd_id, ctrl, payload)
     return Frame(cmd_id=cmd_id, ctrl=ctrl, payload=payload, checksum_ok=ok, raw=bytes(raw))
 
 
+def parse_frames(raw: bytes | bytearray) -> list[Frame]:
+    """Extract all complete Dobot frames from a WebSocket binary message."""
+    frames: list[Frame] = []
+    offset = 0
+    while offset + 1 < len(raw):
+        header_at = raw.find(b"\xAA\xAA", offset)
+        if header_at < 0:
+            break
+        if header_at + 5 > len(raw):
+            break
+        data_len = raw[header_at + 2]
+        if data_len < 2:
+            offset = header_at + 1
+            continue
+        frame_len = 5 + data_len - 2 + 1
+        frame_end = header_at + frame_len
+        if frame_end > len(raw):
+            break
+        frame = parse_frame(raw[header_at:frame_end])
+        if frame is not None:
+            frames.append(frame)
+            offset = frame_end
+        else:
+            offset = header_at + 1
+    return frames
+
+
 def unpack_pose(payload: bytes) -> Pose | None:
-    if len(payload) < 32:
+    if len(payload) != 32:
         return None
     values = struct.unpack("<8f", payload[:32])
+    if not all(math.isfinite(value) for value in values):
+        return None
     return Pose(*values)
 
 
-def unpack_alarms(payload: bytes) -> bytes:
-    if len(payload) >= 32:
-        return payload[:32]
-    return payload.ljust(32, b"\x00")
+def unpack_alarms(payload: bytes) -> bytes | None:
+    if len(payload) != 32:
+        return None
+    return payload
 
 
-def alarm_byte8(alarms: bytes) -> int:
-    if len(alarms) > 8:
-        return alarms[8]
-    return 0
-
-
-def describe_alarm_byte8(value: int) -> str:
-    if value == 0:
-        return "OK"
-    flags = []
-    if value & ALARM_Z_LOWER_LIMIT:
-        flags.append("Z-Endschalter unten")
-    if value & ALARM_STALL:
-        flags.append("Motorstall/Überstrom")
-    leftover = value & ~(ALARM_Z_LOWER_LIMIT | ALARM_STALL)
-    if leftover:
-        flags.append(f"0x{value:02X}")
-    return ", ".join(flags) if flags else f"0x{value:02X}"
+def nonzero_alarm_bytes(alarms: bytes | None) -> str:
+    if alarms is None:
+        return "Status unbekannt"
+    return ", ".join(
+        f"[{index}]=0x{value:02X}"
+        for index, value in enumerate(alarms[:32])
+        if value
+    ) or "keine"
 
 
 def jog_command(axis_index: int, positive: bool) -> int:
