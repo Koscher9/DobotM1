@@ -25,6 +25,30 @@ class Pose:
 
 
 @dataclass(frozen=True)
+class DeviceText:
+    text: str
+    raw_hex: str
+
+
+@dataclass(frozen=True)
+class FirmwareVersion:
+    type_index: int
+    component: str
+    major: int
+    minor: int
+    revision: int | None
+    raw_hex: str
+
+
+@dataclass(frozen=True)
+class OperatingMode:
+    mode: int
+    name: str
+    controller_flag: int | None
+    raw_hex: str
+
+
+@dataclass(frozen=True)
 class AlarmState:
     raw: bytes
 
@@ -45,7 +69,7 @@ class AlarmState:
 class Observation:
     session_id: str
     validity: Validity = Validity.UNKNOWN
-    value: Pose | AlarmState | None = None
+    value: Pose | AlarmState | DeviceText | FirmwareVersion | OperatingMode | None = None
     received_monotonic: float | None = None
     error: str | None = None
 

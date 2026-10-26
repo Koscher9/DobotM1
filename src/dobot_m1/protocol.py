@@ -1,16 +1,20 @@
-"""Pure binary protocol. Only two verified read requests can be encoded."""
+"""Pure binary protocol. Only explicitly verified diagnostic reads exist."""
 
 import math
 import struct
 from dataclasses import dataclass
 from enum import IntEnum
 
-from .models import AlarmState, Pose
+from .models import AlarmState, DeviceText, FirmwareVersion, OperatingMode, Pose
 
 
 class ReadCommand(IntEnum):
+    SERIAL_NUMBER = 0
+    DEVICE_NAME = 1
+    VERSION = 2
     POSE = 10
     ALARMS = 20
+    OPERATING_MODE = 161
 
 
 @dataclass(frozen=True)
@@ -21,11 +25,19 @@ class Frame:
     raw: bytes
 
 
-def encode_read(command: ReadCommand) -> bytes:
+def encode_read(command: ReadCommand, version_index: int | None = None) -> bytes:
     """No generic write encoder and no caller-supplied payload/control bits."""
     if not isinstance(command, ReadCommand):
         raise ValueError("Only a verified ReadCommand is permitted")
-    return bytes((0xAA, 0xAA, 2, command, 0, (-command) & 0xFF))
+    payload = b""
+    if command == ReadCommand.VERSION:
+        if type(version_index) is not int or not 1 <= version_index <= 8:
+            raise ValueError("A verified firmware subtype from 1 to 8 is required")
+        payload = bytes((version_index,))
+    elif version_index is not None:
+        raise ValueError("Firmware subtype is valid only for the version getter")
+    body = bytes((command, 0)) + payload
+    return b"\xaa\xaa" + bytes((len(body),)) + body + bytes(((-sum(body)) & 0xFF,))
 
 
 def decode_pose(payload: bytes) -> Pose:
@@ -39,6 +51,36 @@ def decode_pose(payload: bytes) -> Pose:
 
 def decode_alarms(payload: bytes) -> AlarmState:
     return AlarmState(payload)
+
+
+FIRMWARE_NAMES = {1: "Dobot", 2: "3D Printing", 3: "Driver1", 4: "Driver2", 5: "Driver3", 6: "Driver4", 7: "EndEffector", 8: "FPGA"}
+MODE_NAMES = {0: "unknown", 1: "Dobot Mode", 2: "3D Printing Mode", 3: "Offline Mode", 4: "Test Mode", 5: "Fault Mode"}
+
+
+def decode_read(command: ReadCommand, payload: bytes):
+    if command == ReadCommand.POSE:
+        return decode_pose(payload)
+    if command == ReadCommand.ALARMS:
+        return decode_alarms(payload)
+    if command in (ReadCommand.SERIAL_NUMBER, ReadCommand.DEVICE_NAME):
+        if not payload or len(payload) > 253:
+            raise ValueError("Invalid device text length")
+        try:
+            text = payload.split(b"\0", 1)[0].decode("utf-8", errors="strict")
+        except UnicodeError as exc:
+            raise ValueError("Invalid device text encoding") from exc
+        if not text or not all(c.isprintable() for c in text):
+            raise ValueError("Device text is empty or contains control characters")
+        return DeviceText(text, payload.hex(" "))
+    if command == ReadCommand.VERSION:
+        if len(payload) not in (3, 4) or payload[0] not in FIRMWARE_NAMES:
+            raise ValueError("Invalid firmware version payload")
+        return FirmwareVersion(payload[0], FIRMWARE_NAMES[payload[0]], payload[1], payload[2], payload[3] if len(payload) == 4 else None, payload.hex(" "))
+    if command == ReadCommand.OPERATING_MODE:
+        if len(payload) not in (1, 2):
+            raise ValueError("Expected one or two operating mode bytes")
+        return OperatingMode(payload[0], MODE_NAMES.get(payload[0], "unrecognized"), payload[1] if len(payload) == 2 else None, payload.hex(" "))
+    raise ValueError("Unverified read decoder")
 
 
 class FrameDecoder:

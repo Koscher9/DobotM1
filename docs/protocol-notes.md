@@ -7,9 +7,22 @@ Ziel ist der ursprüngliche M1. Der Transport bleibt vorerst WebSocket entsprech
 - CMD 10 lesen, Steuerbyte 0, leere Nutzlast: `AA AA 02 0A 00 F6`.
 - CMD 20 lesen, Steuerbyte 0, leere Nutzlast: `AA AA 02 14 00 EC`.
 
-Andere Befehle, Steuerbits und Parameter können über die neue Sitzungs-API nicht erzeugt werden. Identitätsabfragen sind nicht implementiert; `not_queried` bedeutet nicht `unsupported`.
+Im normalen `diagnose`-Ablauf werden weiterhin ausschließlich diese beiden Leseanfragen gesendet. `not_queried` bedeutet nicht `unsupported`.
 
-Poseantwort: genau 32 Datenbytes, `<8f`; X/Y/Z/J3 in mm, R/J1/J2/J4 in Grad. Nicht endliche Werte werden abgelehnt. Die acht Werte müssen später zusätzlich mit dem konkreten Gerät abgeglichen werden.
+## Zusätzlich verifizierte Identifikations-Getter ab 0.2.0
+
+- CMD 0 lesen, leere Nutzlast: Seriennummer.
+- CMD 1 lesen, leere Nutzlast: Gerätename.
+- CMD 2 lesen, ein Datenbyte mit Untertyp 1 bis 8: Firmwareversion.
+- CMD 161 lesen, leere Nutzlast: aktueller Modus. Dies ist ausdrücklich kein Modus-Schreibzugriff.
+
+Die zusätzliche Abfrage erfolgt nur über den bewusst gewählten Befehl `identify`. Bei allen Anfragen bleiben Lese-/Schreibbit und Queuebit null. Beliebige Nutzdaten oder Schreibbefehle sind nicht erlaubt.
+
+Die HTML-Quellen des untersuchten Roboters belegen `getVersion(index)` auf `/file/mindex/` und den Modusgetter mit leerer Nutzlast auf derselben Seite. Die Definitionen stehen in `/style/js/dobot/dobot_def.js`. Die Startseite interpretiert Posewerte mit denselben acht Little-Endian-Floats wie unser Programm. Es wurden nur Seitenquellen gelesen, keine Updates oder Bedienelemente ausgeführt.
+
+Die Firmwareanfrage benötigt bei diesem Gerät den Untertyp als Parameter. Eine indexfreie Darstellung in einer älteren Protokolltabelle wird deshalb nicht ungeprüft übernommen. Antworten enthalten Untertyp und Version; bei fehlendem Revisionsbyte bleibt der Wert unbekannt statt künstlich null. Gleiche Befehls-ID bei unterschiedlichen Untertypen erfordert zusätzliches Matching und eine gemeinsame Timeout-Sperre.
+
+Poseantwort: genau 32 Datenbytes, `<8f`; X/Y/Z/J3 in mm, R/J1/J2/J4 in Grad. Nicht endliche Werte werden abgelehnt. Erfolgreiche Dekodierung bestätigt noch keinen richtigen Referenzzustand.
 
 Alarmantwort: genau 32 Datenbytes. Kurze Antworten werden nicht mit Nullen aufgefüllt. Rohdaten werden ohne erfundene Zuordnung zu Endschaltern gespeichert.
 

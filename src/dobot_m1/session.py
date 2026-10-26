@@ -8,7 +8,7 @@ from typing import Callable
 
 from .diagnostics import TraceRecorder
 from .models import Observation, Validity
-from .protocol import Frame, FrameDecoder, ReadCommand, decode_alarms, decode_pose, encode_read
+from .protocol import Frame, FrameDecoder, ReadCommand, decode_read, encode_read
 from .transports import Transport
 
 
@@ -34,6 +34,7 @@ class ReadOnlySession:
         self._lock = asyncio.Lock()
         self._decoder = FrameDecoder()
         self._pending: tuple[ReadCommand, asyncio.Future] | None = None
+        self._pending_version: int | None = None
         self._tainted: set[ReadCommand] = set()
         self._values: dict[ReadCommand, Observation] = {}
         self.last_error: str | None = None
@@ -81,8 +82,8 @@ class ReadOnlySession:
         # Deliberately no JOG stop or other Dobot write in this read-only mode.
         self._log("disconnected")
 
-    async def read(self, command: ReadCommand) -> Observation:
-        raw = encode_read(command)
+    async def read(self, command: ReadCommand, version_index: int | None = None) -> Observation:
+        raw = encode_read(command, version_index)
         async with self._lock:
             if not self.connected:
                 raise DiagnosticError("No active diagnostic connection")
@@ -91,6 +92,7 @@ class ReadOnlySession:
             self._values[command] = Observation(self.session_id)
             future = asyncio.get_running_loop().create_future()
             self._pending = (command, future)
+            self._pending_version = version_index
             sent = False
             try:
                 self._log("tx", raw_hex=raw.hex(" "), command=command.value, request_id=uuid.uuid4().hex)
@@ -122,6 +124,7 @@ class ReadOnlySession:
                 raise
             finally:
                 self._pending = None
+                self._pending_version = None
                 if not future.done():
                     future.cancel()
                 elif not future.cancelled():
@@ -166,11 +169,15 @@ class ReadOnlySession:
             return
         command = ReadCommand(frame.command)
         try:
-            value = decode_pose(frame.payload) if command == ReadCommand.POSE else decode_alarms(frame.payload)
+            value = decode_read(command, frame.payload)
         except ValueError as exc:
             self._values[command] = Observation(self.session_id, Validity.INVALID, error=str(exc))
             self._log("invalid_payload", command=command.value, reason=str(exc))
             return
+        if command == ReadCommand.VERSION and self._pending is not None and self._pending[0] == command:
+            if value.type_index != self._pending_version:
+                self._log("unmatched_firmware_subtype", received=value.type_index, expected=self._pending_version)
+                return
         if command in self._tainted:
             self._log("late_response", command=command.value)
             return

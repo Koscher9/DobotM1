@@ -33,7 +33,7 @@ class DiagnosticTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(replay["samples"][0]["pose"]["value"], report["samples"][0]["pose"]["value"])
             with zipfile.ZipFile(path.with_suffix(".zip")) as archive:
                 self.assertEqual(archive.read("frames.jsonl"), trace.read_bytes())
-                self.assertEqual(json.loads(archive.read("report.json"))["application_version"], "0.1.0")
+                self.assertEqual(json.loads(archive.read("report.json"))["application_version"], "0.2.0")
 
     async def test_live_diagnosis_requires_explicit_uri(self):
         args = parser().parse_args(["diagnose"])

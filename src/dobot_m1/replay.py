@@ -7,6 +7,12 @@ from pathlib import Path
 from .protocol import ReadCommand, encode_read
 
 
+def verified_requests() -> set[bytes]:
+    return {encode_read(c) for c in ReadCommand if c != ReadCommand.VERSION} | {
+        encode_read(ReadCommand.VERSION, index) for index in range(1, 9)
+    }
+
+
 class ReplayMismatch(RuntimeError):
     pass
 
@@ -38,7 +44,7 @@ def load_trace(path: Path) -> list[dict]:
             data = bytes.fromhex(raw)
             if len(data) > 65536:
                 raise ValueError(f"Message too large at line {number}")
-            if event["event"] == "tx" and data not in {encode_read(c) for c in ReadCommand}:
+            if event["event"] == "tx" and data not in verified_requests():
                 raise ValueError("Replay input contains a non-diagnostic request")
         events.append(event)
     if len(sessions) != 1 or not any(e["event"] == "tx" for e in events):

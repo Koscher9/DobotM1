@@ -20,8 +20,15 @@ Stand: 26.10.2026. Ausgangscommit: `7426c4a7621b4f9f936ad76a9bc84702ab92961a`.
 - Alarmabfrage unabhängig vom Erfolg der Poseabfrage.
 - Vollständige JSONL-Daten, Bericht, ZIP-Export und Offline-Demo/Replay.
 
+## Fortschritt ab 0.2.0
+
+- Erste reale Pose-/Alarmantworten empfangen und offline reproduziert.
+- Geräte-, Modus- und Versionsgetter anhand der geräteeigenen Webquellen geprüft und über `identify` integriert.
+- Untertypprüfung und Timeout-Sperre auch für Firmwareabfragen umgesetzt.
+- Tatsächliche Aufbauinformationen und Grenzen in `hardware-checks.md` festgehalten.
+
 ## Noch nicht erledigt
 
-Der **Hardwareteil von M1 ist ausstehend**. Keine echte Verbindung, Position, Alarmantwort oder Firmware wurde mit diesem Paket geprüft. M2 bis M5 sind nicht umgesetzt. Es gibt noch keine neue Jog-Steuerung oder Oberfläche.
+Die lesende Kommunikation ist am vorhandenen M1 nachgewiesen. Referenzzustand, gerätespezifische Alarmdeutung und Wiederinbetriebnahme bleiben offen. Insbesondere fehlt laut Besitzer ein angeschlossener direkter Not-Halt. M2 bis M5 sind nicht umgesetzt. Es gibt noch keine neue Jog-Steuerung oder Oberfläche.
 
 Die erfolgreiche Offline-Demo kann weder Gerätebereitschaft noch Bremsen-, Referenzierungs- oder Bewegungsfunktionen bestätigen.

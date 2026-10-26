@@ -42,6 +42,7 @@ def parser() -> argparse.ArgumentParser:
         ("demo", "Offline-Demo mit kuenstlichen Antworten"),
         ("replay", "Aufzeichnung ausschliesslich offline wiedergeben"),
         ("diagnose", "Explizit eine lesende WebSocket-Diagnose starten"),
+        ("identify", "Geraetekennung, Modus und Firmware zusaetzlich lesen"),
     ):
         command = sub.add_parser(name, help=help_text)
         command.add_argument("--output", type=Path, default=Path("diagnostics"))
@@ -49,7 +50,7 @@ def parser() -> argparse.ArgumentParser:
         command.add_argument("--max-age", type=positive_seconds, default=2.0)
         if name == "replay":
             command.add_argument("trace", type=Path)
-        if name == "diagnose":
+        if name in ("diagnose", "identify"):
             command.add_argument("--uri")
             command.add_argument("--profile", type=Path)
             command.add_argument("--samples", type=sample_count, default=1)
@@ -62,18 +63,20 @@ async def run(args: argparse.Namespace) -> tuple[dict, Path]:
     uri = None
     samples = 1
     replay = None
-    if args.mode == "diagnose":
+    include_identity = args.mode == "identify"
+    if args.mode in ("diagnose", "identify"):
         if args.profile:
             with args.profile.open("rb") as handle:
                 profile = tomllib.load(handle)
         uri = args.uri or profile.get("connection", {}).get("uri")
         if not isinstance(uri, str) or not uri:
-            raise ValueError("diagnose requires an explicit --uri or a configured profile URI")
+            raise ValueError("A live diagnostic requires an explicit --uri or a configured profile URI")
         validate_uri(uri)
         transport = WebSocketTransport(uri)
         samples = args.samples
     else:
         events = load_trace(DEMO_TRACE if args.mode == "demo" else args.trace)
+        include_identity = any(e["event"] == "tx" and bytes.fromhex(e["raw_hex"])[3] in (0, 1, 2, 161) for e in events)
         replay = ReplayTransport(events)
         transport = replay
         # The diagnostic controller always attempts pose then alarms. Repeat
@@ -86,24 +89,28 @@ async def run(args: argparse.Namespace) -> tuple[dict, Path]:
     report = {
         "schema": 1, "application_version": __version__, "python": platform.python_version(),
         "mode": args.mode,
-        "synthetic": True if args.mode == "demo" else False if args.mode == "diagnose" else None,
+        "synthetic": True if args.mode == "demo" else False if args.mode in ("diagnose", "identify") else None,
         "data_origin": "synthetic" if args.mode == "demo" else "recorded_unverified" if args.mode == "replay" else "live_unverified",
         "uri": uri,
         "device_profile": {"provided": profile.get("device", {}), "verified_on_device": False},
         "samples": [], "ok": False, "motion_available": False,
-        "capabilities": {"pose": "implemented_unverified_on_device", "alarms": "implemented_unverified_on_device", "identity": "not_queried"},
+        "capabilities": {"pose": "implemented_unverified_on_device", "alarms": "implemented_unverified_on_device", "identity": "explicit_read_scan" if include_identity else "not_queried"},
     }
     try:
         await session.connect()
         for index in range(samples):
-            result = await DiagnosticController(session).diagnose()
+            controller = DiagnosticController(session)
+            result = await controller.diagnose()
+            if include_identity and session.connected:
+                result["identity"] = await controller.identify()
+            result["connected"] = session.connected
             report["samples"].append(result)
-            if result["errors"] or not result["connected"]:
+            if result["errors"] or result["identity"].get("errors") or not session.connected:
                 break
-            if index + 1 < samples and args.mode == "diagnose":
+            if index + 1 < samples and args.mode in ("diagnose", "identify"):
                 await asyncio.sleep(args.interval)
         report["ok"] = all(
-            not sample["errors"] and sample["connected"]
+            not sample["errors"] and not sample["identity"].get("errors") and session.connected
             and all(sample[key]["validity"] == "valid" for key in ("pose", "alarms"))
             for sample in report["samples"]
         )

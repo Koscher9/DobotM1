@@ -1,6 +1,6 @@
 # Dobot M1: Diagnosekern
 
-Erste Umsetzung unseres Entwicklungsplans: **M0 und Offline-Softwareteil von M1** für den ursprünglichen Dobot M1. Das neue Paket liest ausschließlich Position und rohe Alarmdaten. Es besitzt keine Bewegungs-, Homing-, Parameter- oder Alarmlöschfunktion. Der echte M1 wurde mit dieser Version noch nicht angesprochen.
+Umsetzung unseres Entwicklungsplans für den ursprünglichen Dobot M1: **M0 und lesende Diagnose in M1**. Die normale Diagnose liest Position und rohe Alarmdaten; `identify` liest zusätzlich Gerätekennung, Betriebsmodus und Firmwareversionen. Das Paket besitzt keine Bewegungs-, Homing-, Parameter- oder Alarmlöschfunktion. Erste reale Leseversuche sind in `docs/hardware-checks.md` dokumentiert; Betriebsbereitschaft und Referenzzustand sind weiterhin ungeklärt.
 
 ## Installation unter Windows
 
@@ -11,7 +11,7 @@ py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install .
 ```
 
-Die Laufzeitabhängigkeit ist auf `websockets==17.3` festgelegt. Unter Linux sind dieselben Schritte mit `python3.12` und `.venv/bin/python` möglich. Version 0.1.0 wird zunächst auf Python 3.12 entwickelt und geprüft.
+Die Laufzeitabhängigkeit ist auf `websockets==17.3` festgelegt. Unter Linux sind dieselben Schritte mit `python3.12` und `.venv/bin/python` möglich. Version 0.2.0 wird auf Python 3.12 entwickelt und geprüft.
 
 ## Zuerst ohne Roboter ausprobieren
 
@@ -31,7 +31,7 @@ Den Platzhalter durch die tatsächlich erzeugte JSONL-Datei ersetzen. Replay pr�
 
 ## Späterer lesender Gerätetest
 
-Dieser Schritt wurde noch nicht ausgeführt. Der verfügbare Gerätezugang und die tatsächliche URI müssen zuvor bekannt sein. Andere Programme, die den Roboter steuern, schließen. Ein früher gestartetes Jog-Programm wird von dieser Diagnose nicht angehalten.
+Der verfügbare Gerätezugang und die tatsächliche URI müssen bekannt sein. Andere Programme, die den Roboter steuern, schließen. Ein früher gestartetes Jog-Programm wird von dieser Diagnose nicht angehalten. Die ersten ausgeführten Versuche und ihre Grenzen stehen in `docs/hardware-checks.md`.
 
 `profiles/m1.example.toml` nach `profiles/m1.local.toml` kopieren und dort die tatsächlich verwendete WebSocket-URI eintragen. Beispielprofile bestätigen weder Geräteidentität noch Firmware oder Grenzwerte.
 
@@ -42,6 +42,16 @@ Dieser Schritt wurde noch nicht ausgeführt. Der verfügbare Gerätezugang und d
 Alternativ ist eine ausdrücklich angegebene `--uri` möglich. Es gibt keinen voreingestellten Live-Endpunkt. `diagnose` liest zuerst CMD 10 und danach unabhängig davon CMD 20. Es verändert keinen Modus, keine Parameter, keine Queue und keine Alarme. Auch das normale Beenden sendet keinen Dobot-Schreibbefehl.
 
 Optional: `--samples 10 --interval 0.25`. Nach dem ersten fehlgeschlagenen Diagnosezyklus wird die Aufnahme beendet und exportiert. Ein Timeout gilt nicht als Nachweis einer nicht unterstützten Funktion. Die betroffene Anfrage wird in derselben Sitzung nicht wiederholt, damit verspätete Antworten nicht als neue Antworten ausgegeben werden.
+
+## Gerätekennung und Firmware zusätzlich auslesen
+
+```powershell
+.\.venv\Scripts\python.exe -m dobot_m1 identify --profile .\profiles\m1.local.toml
+```
+
+Dieser bewusst gewählte zusätzliche Lesetest erfasst zunächst Position und Alarme, danach Seriennummer, Name, aktuellen Modus und die acht Versions-Untertypen. Er schaltet keinen Modus um. Die Versionsabfragen entsprechen dem `getVersion(index)`-Aufruf auf der geprüften M1-Webseite. Eine Antwort muss zum angefragten Untertyp passen. Nach einem Versions-Timeout wird keine weitere Anfrage derselben ID gesendet.
+
+Auch Identifikationsaufzeichnungen lassen sich mit `replay` offline wiedergeben. Gerätekennungen und echte Logs bleiben lokal; sie nicht ungeprüft in ein öffentliches Repository übernehmen. A9-Version und Angaben zum physischen Aufbau werden separat dokumentiert, nicht aus der Betriebsart geraten.
 
 ## Tests
 
@@ -73,11 +83,11 @@ Die bisherigen Dateien liegen unverändert unter `legacy/`, einschließlich ihre
 
 ## Grenzen und nächster Schritt
 
-- Identitäts-, Firmware- und weitere Statusabfragen sind noch nicht für dein Gerät verifiziert und werden deshalb nicht geraten. Der Bericht zeigt ausdrücklich `identity: not_queried`.
+- `diagnose` fragt keine Gerätekennung ab und meldet `identity: not_queried`; `identify` liest die nun belegten Getter. Fehlende oder unpassende Antworten bleiben Fehler oder unbekannte Angaben. Ein Firmwarestand allein bestätigt keine funktionierenden Schalter oder korrekten Bezugspunkte.
 - Der Alarmdecoder erfindet keine Endschalterdeutung. Alle 32 Bytes bleiben erhalten.
 - Datenalter ist das Alter des Empfangs, nicht ein vom Controller bestätigter Messzeitpunkt.
 - Die Empfangsgrenze beträgt 64 KiB pro WebSocket-Nachricht. Eine JSONL-Aufzeichnung ist auf 16 MiB begrenzt. Bei Erreichen der Grenze endet die Diagnose mit einem Fehler; vorhandene Daten werden nicht still gekürzt. Alte Sitzungen werden nicht automatisch gelöscht.
 - Bei einem mehrdeutigen oder ausstehenden Telegramm wird auf einen expliziten neuen Verbindungsaufbau verwiesen, nicht automatisch neu verbunden.
 - Bei Strg+C wird die Verbindung bestmöglich geschlossen; die bereits geschriebenen JSONL-Daten bleiben erhalten. Ein regulärer Bericht/ZIP ist bei Prozessabbruch nicht garantiert.
 
-Nächster Schritt nach Prüfung dieses Softwarestands: **ein lesender Gerätetest mit vollständigem Diagnoseexport**. Erst danach folgen M2 und die Vorbereitung kontrollierter Jog-Versuche. Siehe `docs/progress.md`, `docs/plan.md` und `docs/hardware-checks.md`.
+Nächster Schritt: **die Zustandsauffälligkeiten und den physischen Not-Halt-Anschluss klären**. Es gibt noch keine Bewegungsfreigabe. M2 kann softwareseitig vorbereitet werden; M3 benötigt zusätzlich die geklärte Wiederinbetriebnahme. Siehe `docs/progress.md`, `docs/plan.md` und `docs/hardware-checks.md`.
