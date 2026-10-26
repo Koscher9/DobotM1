@@ -1,110 +1,93 @@
-# Dobot M1 — manuelle Achsensteuerung
+# Dobot M1: Diagnosekern
 
-Lokales Python-Projekt für den Dobot M1 (SCARA) im Labornetz. Erster Stand: WebSocket-Client, Tkinter-Jog-Oberfläche und ein Diagnose-Tool.
+Umsetzung unseres Entwicklungsplans für den ursprünglichen Dobot M1: **M0 und lesende Diagnose in M1**. Die normale Diagnose liest Position und rohe Alarmdaten; `identify` liest zusätzlich Gerätekennung, Betriebsmodus und Firmwareversionen. Das Paket besitzt keine Bewegungs-, Homing-, Parameter- oder Alarmlöschfunktion. Erste reale Leseversuche sind in `docs/hardware-checks.md` dokumentiert; Betriebsbereitschaft und Referenzzustand sind weiterhin ungeklärt.
 
-Standard-Adresse (an die Anlage angepasst):
+## Installation unter Windows
 
-```
-ws://192.168.50.150:54321
-```
-
-## Sicherheit
-
-- Arbeitsraum frei halten, bevor eine Achse bewegt wird.
-- Jog-Ratio startet niedrig (10 %). Erst erhöhen, wenn alle Richtungen geprüft sind.
-- Tasten sind **halten zum Fahren** — Loslassen sendet Stopp.
-- **NOT-HALT** stoppt den Jog und leert die Befehlsqueue.
-- CMD-20-Alarme werden als Rohbytes angezeigt. Ihre frühere Zuordnung zu einem einzelnen Z-Endschalter war nicht verlässlich.
-- Ein fehlgeschlagener oder zu kurzer CMD-20-Read wird als **unbekannt** angezeigt, nicht als Nullalarme. Jog-Befehle sind gesperrt, solange keine vollständige CMD-20-Antwort mit ausschließlich Nullbytes vorliegt; bei nicht-null Bytes bleibt die Ursache ungeklärt und muss am Controller geprüft werden. Auch Nullbytes allein sind keine Sicherheitsfreigabe.
-- Alarme beim Verbinden nicht automatisch löschen. **Alarme löschen** nur verwenden, wenn Ursache und Zustand bekannt sind.
-
-## Setup
-
-Python 3.10+ empfohlen. Unter Windows oft `py -3` statt `python`. Im Projektordner:
+Voraussetzung: Python 3.12. Alle Befehle im Projektordner ausführen. Eine Aktivierung der Umgebung ist nicht erforderlich.
 
 ```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+py -3.12 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .
 ```
 
-PC und Roboter müssen im gleichen Netz liegen. Die URI steht in `config.py`.
+Die Laufzeitabhängigkeit ist auf `websockets==17.3` festgelegt. Unter Linux sind dieselben Schritte mit `python3.12` und `.venv/bin/python` möglich. Version 0.2.0 wird auf Python 3.12 entwickelt und geprüft.
 
-## Jog-Oberfläche
+## Zuerst ohne Roboter ausprobieren
 
 ```powershell
-py -3 jog.py
+.\.venv\Scripts\python.exe -m dobot_m1 demo
 ```
 
-Funktionen:
+Die Demo verwendet eindeutig gekennzeichnete künstliche Antworten. Sie öffnet keinen Netzwerkzugang. In `diagnostics/` entstehen je Lauf drei Dateien mit einer eindeutigen Kennung: vollständige Nachrichten als `.jsonl`, Bericht als `.json` und beides zusammen als `.zip`.
 
-- Verbinden / Trennen
-- Gelenke J1–J4 oder kartesisch X/Y/Z/R
-- Plus/Minus halten
-- Live-Pose und nicht-null CMD-20-Alarmbytes
-- Alarme löschen
-
-Frames der UI landen in `logs/jog.jsonl` (nicht im Git).
-
-## Kurzer Z-Test mit CMD 73
-
-Der klassische M1-Jog-Befehl ist CMD 73 (Gelenk-Jog: J3+ = 5, J3− = 6). Das Diagnosewerkzeug sendet diesen nativen Jog-Befehl kurz, stoppt anschließend und vergleicht die Pose:
-
-Nur bei freiem Arbeitsraum, geklärtem Controllerstatus und direkter Beobachtung ausführen. Die Jog-Dauer ist auf 50–250 ms begrenzt und die Geschwindigkeit auf 10 %. Bei unbekanntem oder nicht-null CMD-20-Rohstatus bricht das Tool vor dem Jog ab. Führe die Befehle einzeln in PowerShell im Projektordner aus:
+Eine Aufzeichnung wird ausschließlich offline wiedergegeben:
 
 ```powershell
-# 1. Kurzer Aufwärtstest
-py -3 .\tools\direct_z.py up --ms 100
-
-# 2. Nur wenn oben eine sichtbare Bewegung und ein passendes positives ΔJ3 gemeldet wurde:
-py -3 .\tools\direct_z.py down --ms 100
+.\.venv\Scripts\python.exe -m dobot_m1 replay .\diagnostics\DEINE_KENNUNG.jsonl
 ```
 
-`up`/`down` sind Richtungen; `--ms` braucht immer eine Dauer, zum Beispiel `100`. Alte Schreibweisen wie `--down 0.5`, `--down-ms` ohne Zahl oder `--down-250` funktionieren nicht. Ein erfolgreicher Aufruf muss „Bewegung abgeschlossen“ sowie Vorher-/Nachher-Pose ausgeben. Bei „Keine messbare J3-Bewegung“ den Abwärtstest nicht starten und den Inhalt von `logs\direct_z.jsonl` sichern.
+Den Platzhalter durch die tatsächlich erzeugte JSONL-Datei ersetzen. Replay prüft die Befehlsreihenfolge und sendet niemals aufgezeichnete Frames an den Roboter. Es ist ein Kommunikationsnachweis anhand aufgezeichneter Nachrichten, keine Physiksimulation und keine Prüfung realer Bewegungen. Ein Bericht mit `ok: true` bestätigt ausschließlich die erfolgreich ausgewertete Diagnose. Auch 32 Nullalarmbytes ergeben keine Bewegungsfreigabe.
 
-Die GUI startest du separat:
+## Späterer lesender Gerätetest
+
+Der verfügbare Gerätezugang und die tatsächliche URI müssen bekannt sein. Andere Programme, die den Roboter steuern, schließen. Ein früher gestartetes Jog-Programm wird von dieser Diagnose nicht angehalten. Die ersten ausgeführten Versuche und ihre Grenzen stehen in `docs/hardware-checks.md`.
+
+`profiles/m1.example.toml` nach `profiles/m1.local.toml` kopieren und dort die tatsächlich verwendete WebSocket-URI eintragen. Beispielprofile bestätigen weder Geräteidentität noch Firmware oder Grenzwerte.
 
 ```powershell
-py -3 .\jog.py
+.\.venv\Scripts\python.exe -m dobot_m1 diagnose --profile .\profiles\m1.local.toml
 ```
 
-Das Terminal meldet den Start; im Fenster auf **Verbinden** klicken, **Gelenke (J1–J4)** wählen und zum Joggen die jeweilige Taste kurz gedrückt halten. Loslassen stoppt. Erscheint kein Fenster oder kehrt PowerShell sofort zur Eingabe zurück, ist die GUI nicht gestartet — dann die komplette Fehlermeldung aus dem Terminal sichern.
+Alternativ ist eine ausdrücklich angegebene `--uri` möglich. Es gibt keinen voreingestellten Live-Endpunkt. `diagnose` liest zuerst CMD 10 und danach unabhängig davon CMD 20. Es verändert keinen Modus, keine Parameter, keine Queue und keine Alarme. Auch das normale Beenden sendet keinen Dobot-Schreibbefehl.
 
-Die Anwendung ordnet CMD-20-Rohdaten keinem einzelnen Alarm oder Endschalter zu und löscht Alarme nicht automatisch. Jog-Befehle werden bereits im Client abgelehnt, wenn der Alarmstatus unbekannt ist oder irgendein Alarm-Rohbyte nicht null ist. Der Diagnose-Kurztest sendet CMD 73 nur, wenn eine vollständige CMD-20-Antwort aus 32 Nullbytes vorliegt; ein Nullstatus ist trotzdem keine Anlagenfreigabe. Nicht-null Rohdaten brechen den Test ab, bis die Ursache am Controller geklärt ist. Nach jedem tatsächlich gestarteten Test werden Pose, rohe Alarmbytes und Frames in `logs/direct_z.jsonl` protokolliert. Wenn keine messbare Bewegung erfolgt, nicht blind wiederholen: zuerst Log und Fehlerstatus auswerten. Den Arm nicht mit Kraft von Hand bewegen; Motoren/Bremse können ihn festhalten.
+Optional: `--samples 10 --interval 0.25`. Nach dem ersten fehlgeschlagenen Diagnosezyklus wird die Aufnahme beendet und exportiert. Ein Timeout gilt nicht als Nachweis einer nicht unterstützten Funktion. Die betroffene Anfrage wird in derselben Sitzung nicht wiederholt, damit verspätete Antworten nicht als neue Antworten ausgegeben werden.
 
-**Protokollreferenz:** Das öffentliche [HarvestX/dobot_m1](https://github.com/HarvestX/dobot_m1) definiert den nativen J3−-Jog als CMD 73, Wert 6. Dessen Alarmcode-Enum und `AlarmStateToCode`-Implementierung legen für das erste nicht-null Byte `[8]=0x25` den Kandidaten `0x46` (`ERR_LIMIT_AXIS4_POS`) nahe. Das ist ein Hinweis, keine bestätigte Diagnose: Die Zuordnung ist für die konkrete Steuerungs-/Firmwareversion nicht unabhängig verifiziert und erklärt die übrigen gesetzten Rohdaten nicht. Daher zeigt die Anwendung weiterhin Rohbytes, sperrt Jog bei nicht-null Werten und fordert den Abgleich mit der Controlleranzeige. Sie löscht nichts automatisch. Das 4-Achs-PDF und [TCP-IP-4Axis-Python](https://github.com/Dobot-Arm/TCP-IP-4Axis-Python) betreffen eine andere ASCII/TCP-Schnittstelle und ersetzen den klassischen M1-WebSocket-Treiber nicht.
-
-## Diagnose, wenn nichts geht
+## Gerätekennung und Firmware zusätzlich auslesen
 
 ```powershell
-py -3 tools/probe.py
+.\.venv\Scripts\python.exe -m dobot_m1 identify --profile .\profiles\m1.local.toml
 ```
 
-Das Skript prüft nacheinander:
+Dieser bewusst gewählte zusätzliche Lesetest erfasst zunächst Position und Alarme, danach Seriennummer, Name, aktuellen Modus und die acht Versions-Untertypen. Er schaltet keinen Modus um. Die Versionsabfragen entsprechen dem `getVersion(index)`-Aufruf auf der geprüften M1-Webseite. Eine Antwort muss zum angefragten Untertyp passen. Nach einem Versions-Timeout wird keine weitere Anfrage derselben ID gesendet.
 
-1. TCP zu `192.168.50.150:54321`
-2. WebSocket-Handshake
-3. unaufgeforderte Frames
-4. CMD 10 (Pose)
-5. CMD 20 (Alarme)
+Auch Identifikationsaufzeichnungen lassen sich mit `replay` offline wiedergeben. Gerätekennungen und echte Logs bleiben lokal; sie nicht ungeprüft in ein öffentliches Repository übernehmen. A9-Version und Angaben zum physischen Aufbau werden separat dokumentiert, nicht aus der Betriebsart geraten.
 
-Ergebnis kommt als JSON auf die Konsole, Rohframes nach `logs/probe.jsonl`. Ein strukturell ungueltiger oder zu kurzer Pose-/Alarm-Frame gilt als fehlgeschlagen. `motion_clearance` bleibt auch bei Nullbytes `unknown`: Die Probe ist kein Bewegungsfreigabe- oder Sicherheitscheck.
+## Tests
 
-## CMD-20-Timeout in der Jog-Oberfläche
-
-Im bisherigen Frame-Log gibt es WebSocket-Nachrichten mit zwei direkt aneinandergehängten Antworten (CMD 10 Pose + CMD 20 Alarme, insgesamt 76 Byte). Die alte Empfangsroutine erwartete pro Nachricht exakt einen Frame und verwarf deshalb beide Antworten; parallel gestartete, überlappende Polls konnten zusätzlich zu irreführenden Timeouts führen. Die aktuelle Routine zerlegt Nachrichten in einzelne Frames, stellt Pose-/Alarm-Polls nacheinander und serialisiert gleichzeitige Anfragen derselben CMD-ID. Ein `CMD 20`-Timeout bedeutet daher nicht mehr, dass der Roboter generell unerreichbar ist; `tools/probe.py` bestätigt bereits eine gültige Antwort mit Alarmbyte `0x25`.
-
-CMD 20 wird beim aktuellen Probe erfolgreich beantwortet. Seine 32 Bytes werden jetzt unverändert protokolliert und nicht mehr als einzelne Achsen- oder Stallflags missdeutet. Der Z-Test verwendet den dokumentierten nativen CMD-73-Jog, prüft die tatsächliche Poseänderung und stoppt den Jog automatisch nach kurzer Dauer.
-
-## Projektstruktur
-
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -t . -v
 ```
-config.py          URI und Jog-Ratio
-dobot/protocol.py  Binärframes
-dobot/client.py    WebSocket + Hintergrund-Thread
-dobot/logger.py    JSONL-Frames
-ui/jog_app.py      Tkinter
-tools/probe.py     Analyse
-tools/direct_z.py  kontrollierter Z-Test
-jog.py             Start der Oberfläche
+
+Alle neuen Tests arbeiten mit künstlichen Transporten oder einem simulierten WebSocket-Objekt. Sie benötigen keinen Roboter und öffnen keine echte Roboterverbindung.
+
+Die unveränderten bisherigen Tests lassen sich separat als Vergleich ausführen:
+
+```powershell
+Push-Location legacy
+..\.venv\Scripts\python.exe -m unittest discover -s tests -v
+Pop-Location
 ```
+
+## Struktur
+
+- `models.py`: Einheiten, unveränderliche Beobachtungen, Statusalter und Alarmrohwerte.
+- `protocol.py`: reines Binärformat und ausschließlich die beiden geprüften Leseanfragen.
+- `transports/websocket.py`: Verbindung ohne Roboterinitialisierung.
+- `session.py`: einziger Empfänger, Antwortprüfung, Timeouts und Sitzungswechsel.
+- `controller.py`: unabhängige Erfassung von Position und Alarmen.
+- `diagnostics.py` und `replay.py`: vollständige lokale Aufzeichnung, Export und Offline-Wiedergabe.
+- `cli.py`: Diagnose, Demo und Replay. Eine GUI folgt in einer späteren Etappe.
+
+Die bisherigen Dateien liegen unverändert unter `legacy/`, einschließlich ihrer eigenen README und Tests. Sie sind ein Vergleichsstand und kein Teil des neuen installierten Pakets. Dort vorhandene Bewegungsfunktionen wurden nicht neu getestet oder freigegeben; sie nicht parallel zur neuen Diagnose starten.
+
+## Grenzen und nächster Schritt
+
+- `diagnose` fragt keine Gerätekennung ab und meldet `identity: not_queried`; `identify` liest die nun belegten Getter. Fehlende oder unpassende Antworten bleiben Fehler oder unbekannte Angaben. Ein Firmwarestand allein bestätigt keine funktionierenden Schalter oder korrekten Bezugspunkte.
+- Der Alarmdecoder erfindet keine Endschalterdeutung. Alle 32 Bytes bleiben erhalten.
+- Datenalter ist das Alter des Empfangs, nicht ein vom Controller bestätigter Messzeitpunkt.
+- Die Empfangsgrenze beträgt 64 KiB pro WebSocket-Nachricht. Eine JSONL-Aufzeichnung ist auf 16 MiB begrenzt. Bei Erreichen der Grenze endet die Diagnose mit einem Fehler; vorhandene Daten werden nicht still gekürzt. Alte Sitzungen werden nicht automatisch gelöscht.
+- Bei einem mehrdeutigen oder ausstehenden Telegramm wird auf einen expliziten neuen Verbindungsaufbau verwiesen, nicht automatisch neu verbunden.
+- Bei Strg+C wird die Verbindung bestmöglich geschlossen; die bereits geschriebenen JSONL-Daten bleiben erhalten. Ein regulärer Bericht/ZIP ist bei Prozessabbruch nicht garantiert.
+
+Nächster Schritt: **die Zustandsauffälligkeiten und den physischen Not-Halt-Anschluss klären**. Es gibt noch keine Bewegungsfreigabe. M2 kann softwareseitig vorbereitet werden; M3 benötigt zusätzlich die geklärte Wiederinbetriebnahme. Siehe `docs/progress.md`, `docs/plan.md` und `docs/hardware-checks.md`.

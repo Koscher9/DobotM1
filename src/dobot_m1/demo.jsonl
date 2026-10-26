@@ -1,0 +1,4 @@
+{"schema": 1, "session_id": "synthetic-demo", "event": "tx", "raw_hex": "aa aa 02 0a 00 f6"}
+{"schema": 1, "session_id": "synthetic-demo", "event": "rx", "raw_hex": "aa aa 22 0a 00 00 00 16 43 00 00 48 42 00 00 c8 42 00 00 00 00 00 00 20 41 00 00 a0 41 00 00 c8 42 00 00 f0 c1 0c"}
+{"schema": 1, "session_id": "synthetic-demo", "event": "tx", "raw_hex": "aa aa 02 14 00 ec"}
+{"schema": 1, "session_id": "synthetic-demo", "event": "rx", "raw_hex": "aa aa 22 14 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 ec"}

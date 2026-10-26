@@ -1,0 +1,10 @@
+# Copy to m1.local.toml. Fill in the URI actually used at your robot.
+# This example does not confirm identity, firmware, limits or motion readiness.
+[connection]
+uri = ""
+
+[device]
+model = "Dobot M1"
+identity_status = "unverified"
+serial_number = "unknown"
+firmware = "unknown"
