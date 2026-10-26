@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dobot-m1-diagnostics"
+version = "0.1.0"
+description = "Read-only diagnostics for the original Dobot M1"
+requires-python = ">=3.12,<3.13"
+dependencies = ["websockets==17.3"]
+
+[project.scripts]
+dobot-m1 = "dobot_m1.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+dobot_m1 = ["demo.jsonl"]

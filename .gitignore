@@ -3,10 +3,13 @@ __pycache__/
 *.egg-info/
 .venv/
 venv/
-.env
+build/
+dist/
 logs/
-*.log
-.DS_Store
-Thumbs.db
+diagnostics/
+*.local.toml
+.env
 .idea/
 .vscode/
+.DS_Store
+Thumbs.db

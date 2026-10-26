@@ -1,0 +1,648 @@
+DOBOT M1 - REPOSITORYANALYSE UND GRUNDLAGE FÜR DIE WEITERE ENTWICKLUNG
+Stand: 26.10.2026 | Repository: https://github.com/Koscher9/DobotM1
+Gegenstand: ursprünglicher Dobot M1, keine M1-Pro-Steuerung
+
+1. ERGEBNIS UND EINORDNUNG
+========================
+
+Das Projekt enthält eine brauchbare Grundlage für die Kommunikation mit deinem
+M1. Eine aufgebaute WebSocket-Verbindung ist aber noch kein Nachweis, dass die
+Steuerung betriebsbereit ist oder Bewegungsbefehle tatsächlich ausführt.
+
+Deine Rückmeldung in diesem Chat:
+- Die beobachteten Probleme betreffen den Softwarestand vom 22.10.2026.
+- Z fuhr überhaupt nicht zuverlässig hoch oder herunter.
+- Armbewegungen funktionierten nur in einer Richtung.
+- Die Überarbeitung vom 26.10. wurde noch nicht am Roboter ausprobiert.
+- Bisher wurde ausschließlich mit Python gearbeitet.
+- M1Studio ist nicht installiert und lässt sich bei dir derzeit nicht installieren.
+- Aktuelle Alarmcodes liegen nicht vor.
+
+Die stärksten softwareseitigen Befunde zum alten Stand:
+1) Eine ausdrücklich eingebaute, nicht belastbar begründete Alarmmaske konnte
+   Z-Abwärtsfahrt lokal verhindern. Das erklärt eine mögliche einseitige
+   Z-Sperre, aber weder die komplette Z-Störung noch alle Armprobleme.
+2) Zusammengefasste Pose-/Alarmantworten wurden unvollständig verarbeitet.
+   Bei Pose vor Alarm ging die Alarmantwort verloren.
+3) Einstellungen, Jog und Stopp wurden lediglich gesendet. Eine passende
+   Controllerantwort wurde nicht abgewartet. Erfolgreiches Senden konnte
+   daher mit erfolgreicher Steuerung verwechselt werden.
+4) Kartesische Jog-Parameter wurden nicht initialisiert oder zurückgelesen.
+5) Das Alarmlösch-Telegramm besitzt eine andere Nutzdatenlänge als dokumentiert.
+
+Der heutige Stand verbessert mehrere dieser Probleme. Er ist trotzdem noch
+keine am Gerät bestätigte Lösung. Insbesondere bestehen Lücken bei der
+Gültigkeit von Alarmdaten, bei Befehlsbestätigungen und beim Verhalten nach
+Statusfehlern während einer laufenden Bewegung.
+
+Es wurde kein Roboter angesprochen und keine Bewegung ausgelöst. Die Prüfung
+bestand aus vollständigem Lesen des aktuellen Repositoryinhalts, Vergleich
+mit dem vorherigen Stand, Protokollabgleich und lokalen Simulationen.
+
+2. GEPRÜFTE VERSIONEN UND UMFANG
+==============================
+
+Aktueller main-Stand:
+7426c4a7621b4f9f936ad76a9bc84702ab92961a
+Commit: "Update Dobot M1 control tools and tests"
+Zeit laut GitHub: 26.10.2026, 18:00:46 Uhr, Europe/Berlin.
+
+Vorheriger Stand, auf den sich deine Beobachtungen beziehen:
+8aa03bc4c978722426c27cfff8659bd2b16937db
+Commit: "Add Dobot M1 manual jog UI and connection probe."
+Zeit laut GitHub: 22.10.2026, 20:08:30 Uhr, Europe/Berlin.
+
+Es gibt im abgefragten Repository genau diese zwei Commits und einen Branch
+(main). Die Abfragen lieferten keine Issues, Pull Requests, Releases oder
+GitHub-Actions-Läufe. Somit liegen dort keine zusätzlichen Diskussionen oder
+CI-Ergebnisse als Nachweis einer erfolgreichen Roboterfahrt vor.
+
+Der aktuelle Stand enthält 18 Dateien, davon 15 Python-Dateien mit zusammen
+1.608 Zeilen. Alle 18 heruntergeladenen Dateiinhalte wurden gegen die von
+GitHub gelieferten Git-Blob-Prüfsummen geprüft: 18 von 18 stimmen überein.
+Alle aktuellen Dateien wurden gelesen. Für den alten Stand wurden zusätzlich
+Client, Protokoll, Bedienoberfläche und README separat gelesen; außerdem
+wurde die Änderungsmenge des aktuellen Commits geprüft.
+
+Wichtig: Die README erwähnt frühere echte Frame-Logs. Diese Logs sind nicht
+im Repository enthalten; logs/ wird in .gitignore ausgeschlossen. Aussagen
+über die damaligen Messdaten konnten deshalb nicht unabhängig nachgeprüft
+werden. Ein Test mit künstlichem Alarmbyte 0x25 ersetzt kein Original-Log.
+
+3. AUFBAU DES PROGRAMMS
+======================
+
+config.py
+  Anlagenadresse, Jog-Raten und Zeitgrenzen. Aktuell:
+  ws://192.168.50.150:54321
+  Jog-Geschwindigkeit und -Beschleunigung jeweils 10 Prozent.
+  Pose-Abfrageintervall 250 ms nach Abschluss des vorherigen Statuszyklus.
+  Verbindungsaufbau maximal 5 s, Antworttimeout je Anfrage 1,5 s.
+  Im alten Stand: ws://192.168.0.97:54321 und jeweils 25 Prozent.
+  Beide Adressen sind projektspezifische Einstellungen, keine hier
+  verifizierten Hersteller-Standardadressen.
+
+jog.py
+  Startet die Tkinter-Oberfläche.
+
+ui/jog_app.py
+  Verbindungsbedienung, Auswahl Gelenke/kartesisch, Plus-/Minustasten,
+  Geschwindigkeitsregler, Poseanzeige und Alarmanzeige.
+  Tastendruck startet Jog; Loslassen fordert Stopp an.
+
+dobot/client.py
+  WebSocket-Client mit eigenem asyncio-Hintergrundthread für Tkinter.
+  Verpackt Befehle, empfängt Antworten und verwaltet wartende Anfragen.
+  connect() verändert bereits Modus und Jog-Einstellungen.
+
+dobot/protocol.py
+  Binärformat, Prüfsumme, Frame-Zerlegung, Pose und rohe Alarmdaten.
+
+dobot/logger.py
+  JSONL-Protokollierung von Verbindung, Senden, Empfang und Fehlern.
+  Rohdaten werden derzeit auf 80 Bytes pro WebSocket-Nachricht begrenzt.
+
+tools/probe.py
+  Prüft TCP, WebSocket, unaufgeforderte Nachrichten, Pose und Alarmantwort.
+  Es ruft nicht die Modusinitialisierung des DobotClient auf.
+  Ein positives Gesamtergebnis bedeutet gültige Kommunikation, keine
+  Bewegungsfreigabe. Auch nicht-null Alarmdaten können bei gültiger Antwort
+  zu report.ok=true führen; motion_clearance bleibt unknown.
+
+tools/direct_z.py
+  Neu am 26.10.: zeitlich begrenzter J3-Jog mit Vorher-/Nachher-Pose.
+  Zulässige CLI-Dauer 50 bis 250 ms, Jog-Raten 10 Prozent.
+  Sperrt bei unbekannten oder nicht-null Alarmdaten.
+  Es handelt sich um echten Jog über CMD 73, nicht um einen unabhängigen
+  Direktzugriff auf Motor oder Bremse.
+
+tests/test_client.py, tests/test_protocol.py,
+tests/test_probe.py, tests/test_direct_z_cli.py
+  Insgesamt 26 automatisierte Tests mit künstlichen Antworten und Mocks.
+
+requirements.txt
+  Nur websockets>=12.0. Python 3.10+ wird empfohlen; Tkinter muss mit der
+  jeweiligen Python-Installation verfügbar sein.
+
+.gitignore sowie die __init__.py-Dateien
+  Ausschlüsse für lokale Dateien und Python-Paketstruktur.
+
+Nicht implementiert sind unter anderem eine vollständige Geräte-/Firmware-
+diagnose, ein bestätigter Referenzierungsablauf, ein vollständiger Alarmdecoder,
+eine explizite Betriebsbereitschaftsprüfung und eine PTP-Bahnsteuerung.
+
+4. PROTOKOLLWISSEN FÜR DIE WEITERE ARBEIT
+=======================================
+
+Im Repository wird ein binäres Dobot-Format über WebSocket verwendet:
+AA AA | Länge | Befehls-ID | Steuerbyte | Nutzdaten | Prüfsumme.
+Die Länge umfasst ID, Steuerbyte und Nutzdaten. Die Prüfsumme ergänzt deren
+Byte-Summe modulo 256 zu null. Mehrbytewerte werden little-endian gepackt.
+Das Frame-Packing ist im gelesenen Code konsistent.
+
+Vom aktuellen Projekt verwendete IDs:
+- 10: Pose lesen; Code erwartet 8 float32, insgesamt 32 Datenbytes:
+  X, Y, Z, R, J1, J2, J3, J4.
+- 20: Alarme lesen bzw. löschen; Lesen erwartet 32 rohe Alarmbytes.
+- 70: Gelenk-Jog-Geschwindigkeiten und -Beschleunigungen setzen.
+- 72: gemeinsame Jog-Raten setzen.
+- 73: Jog starten bzw. mit Kommando 0 stoppen.
+- 161: vom Projekt als Firmware-/Betriebsmodus gesetzt, Nutzdaten 01 01.
+  Der tatsächlich wirksame Modus wird nicht zurückgelesen.
+- 245: Befehlsqueue leeren.
+
+Im M1-Protokoll zusätzlich relevant:
+- 71 verwaltet kartesische Jog-Parameter; im Projekt fehlt diese Anbindung.
+- 29 ist in Protokoll V1.1 als Statusabfrage beschrieben; Unterstützung und
+  Bedeutung müssen mit der vorhandenen Firmware abgeglichen werden.
+
+CMD 73 nutzt zwei Datenbytes: isJoint und Richtungscode. [Q1]
+isJoint=1 bedeutet Gelenke; isJoint=0 bedeutet kartesische Achsen.
+Die Richtungscodes des aktuellen und alten Projekts sind gleich:
+  0 Stopp
+  1 J1+ / X+      2 J1- / X-
+  3 J2+ / Y+      4 J2- / Y-
+  5 J3+ / Z+      6 J3- / Z-
+  7 J4+ / R+      8 J4- / R-
+
+J3 ist beim ursprünglichen M1 die Hubachse. Die Trennung von Gelenkraum und
+kartesischem Raum ist entscheidend: J1 und J2 sind nicht einfach X und Y.
+Eine SCARA-Ausgangspose kann kartesische Bewegung in einer Richtung begrenzen,
+obwohl ein einzelnes Gelenk noch beweglich wäre.
+
+Nur als Referenz für spätere Logauswertung, nicht als Aufforderung zum Senden:
+  Pose lesen:       AA AA 02 0A 00 F6
+  Alarme lesen:     AA AA 02 14 00 EC
+  J3+ im Gelenkraum:AA AA 04 49 01 01 05 B0
+  J3- im Gelenkraum:AA AA 04 49 01 01 06 AF
+  Jog-Stopp Gelenk: AA AA 04 49 01 01 00 B5
+
+Die Zuordnung von Plus/Minus zu einer tatsächlich beobachteten räumlichen
+Bewegung muss mit Pose und Sichtbeobachtung bestätigt werden. Eine korrekte
+Bytefolge allein beweist keine Bewegung.
+
+5. BEFUNDE ZUM STAND VOM 22.10.
+==============================
+
+A1 - Alte Z-Abwärtssperre beruht auf ungesicherter Alarmdeutung
+Priorität: hoch | Im Code eindeutig, damalige Aktivierung nicht nachweisbar.
+
+Fundstellen alter Stand:
+  dobot/protocol.py: ALARM_Z_LOWER_LIMIT=0x20 und describe_alarm_byte8().
+  dobot/client.py: jog(), downward_z und last_alarm_byte8.
+
+Die Anwendung deutete Bit 0x20 im neunten Alarmbyte als unteren Z-Endschalter.
+Bei Achsenindex 2 und negativer Richtung wurde dann vor dem Senden abgebrochen.
+Der Wert 0x25 würde diese Bedingung erfüllen: 0x25 & 0x20 ist nicht null.
+Damit konnte die Software selbst eine Abwärtsfahrt verbieten, unabhängig
+davon, ob die Hardware diesen bestimmten Z-Zustand tatsächlich meldete.
+
+Die Herstellerdokumentation beschreibt Alarmbytes als mehrere einzelne
+Alarmbits; eine isolierte Bedeutung des gesamten Byteindex 8 als Z-Schalter
+ist damit nicht belegt. [Q3] Diese pauschale Deutung wurde am 26.10. entfernt.
+
+Erklärungskraft: stark für eine mögliche lokal blockierte Z-Abwärtsfahrt;
+keine vollständige Erklärung für fehlendes Z-Aufwärtsfahren oder einseitige
+J1-/J2-Bewegungen. Dafür fehlen die damaligen Originalantworten.
+
+A2 - Zweiter Frame einer WebSocket-Nachricht ging verloren
+Priorität: hoch | Lokal nachgestellt.
+
+Fundstellen alter Stand:
+  dobot/protocol.py: parse_frame().
+  dobot/client.py: _reader_loop().
+
+Der alte Parser akzeptiert eine Nachricht mit zusätzlichen Bytes, gibt aber
+nur den ersten darin enthaltenen Frame zurück. Ein künstliches 76-Byte-Paket
+mit Pose (38 Bytes) und Alarm (38 Bytes) liefert im alten Stand ausschließlich
+CMD 10. Die dahinterstehende CMD-20-Antwort erreicht ihren wartenden Aufruf
+nicht. Die Reihenfolge entscheidet, welche Antwort verloren geht.
+
+Präzisierung gegenüber der heutigen README: Der alte Code verwarf bei einem
+vollständigen ersten Frame nicht beide Antworten. Er behielt den ersten und
+ignorierte den zweiten. Die Aussage in der README ist in dieser Form falsch.
+
+Alte Polls wurden zudem alle 250 ms neu gestartet, auch wenn frühere Aufrufe
+noch auf Antworten warteten. Das konnte ausstehende Anfragen anhäufen.
+Seit 26.10. gibt es Mehrfachframe-Zerlegung, serialisierte Statuszyklen und
+Sperren gegen gleichzeitige Anfragen derselben ID. Diese Verbesserungen sind
+im Code vorhanden, aber noch nicht durch einen neuen Gerätetest bestätigt.
+
+A3 - Ungültige oder fehlende Daten wurden zu plausiblen Daten
+Priorität: hoch | Im Code eindeutig; heute teilweise behoben.
+
+Altes unpack_alarms() ergänzte kurze Alarmantworten mit Nullbytes. Ein
+unvollständiger Datensatz konnte dadurch wie ein vollständiger alarmfreier
+Zustand aussehen. Der alte Reader prüfte außerdem checksum_ok nicht, bevor
+er die Antwort weitergab.
+
+Heute werden genau 32 Alarmbytes gefordert; ungültige Prüfsummen werden im
+Client verworfen. Posewerte müssen vollständig und endlich sein. Das sind
+sinnvolle Verbesserungen der Kommunikationsdiagnose.
+
+A4 - Alarme beim Verbinden automatisch gelöscht
+Priorität: hoch | Im alten Code belegt; heute entfernt.
+
+_prepare_mode1() rief früher clear_alarms() auf. Damit konnte der ursprüngliche
+Fehlerzustand direkt beim Verbinden verändert werden, bevor er dokumentiert
+war. Fehler beim Löschen/anschließenden Lesen wurden teilweise verschluckt.
+Die heutige Initialisierung löscht Alarme nicht mehr automatisch.
+
+6. OFFENE BEFUNDE IM HEUTIGEN STAND
+=================================
+
+B1 - Alarmlöschen verwendet falsche dokumentierte Nutzdatenlänge
+Priorität: hoch | Abweichung eindeutig; Controllerreaktion ungemessen.
+
+Fundstelle: dobot/client.py:146-149, clear_alarms().
+Der Code sendet CMD 20 schreibend mit 32 Nullbytes. Das M1-Protokoll beschreibt
+ClearAllAlarmsState dagegen als schreibende CMD 20 mit leerer Nutzlast. [Q2]
+Der Fehler besteht auch im alten Stand. Manche Firmware könnte zusätzliche
+Bytes ignorieren; andere könnte das Telegramm ablehnen. Beides ist derzeit
+unbekannt. Korrekt wäre das dokumentierte Format samt passender Bestätigung
+und anschließendem neuem Lesen. Ein bloßes späteres Nullergebnis beweist nicht,
+dass gerade der vorherige Löschbefehl korrekt verarbeitet wurde.
+
+B2 - Befehlsversand wird nicht als Controlleraktion bestätigt
+Priorität: hoch | Lokal nachgestellt.
+
+Fundstellen: dobot/client.py:151-216 und ui/jog_app.py:_report_command().
+send() wartet nur auf ws.send(). Jog, Stopps, Raten, Modus und Queue-Löschen
+werden nicht mit passenden Antworten abgeglichen. _prepare_mode1() kehrt in
+der Simulation ohne irgendeine Roboterantwort erfolgreich zurück; gesendet
+werden lediglich 161, 70 und 72. Die Oberfläche kann "Befehl erfolgreich"
+melden, obwohl lediglich die Übertragung beendet wurde.
+
+Empfehlung: Transportstatus, protokollbestätigte Annahme und nachgewiesene
+Ausführung getrennt führen. Einstellungen zurücklesen. Für Bewegung und
+Stopp zusätzlich Pose-/Statusverlauf prüfen; eine ACK allein beweist noch
+keine Ausführung. Das ist auch eine Lücke der alten Version.
+
+B3 - Alarmcache überlebt Trennen und Wiederverbinden
+Priorität: hoch | Lokal nachgestellt.
+
+Fundstellen: dobot/client.py:55, 67-122 und 154-164.
+last_alarms wird beim Trennen oder Neuverbinden nicht gelöscht. Ein Nullstatus
+der vorigen Verbindung kann deshalb in einer neuen Verbindung Jog erlauben,
+bevor dort überhaupt ein neuer Alarmstatus gelesen wurde.
+In der Simulation blieb der Cache nach close() null; nach Einsetzen einer
+neuen simulierten Verbindung wurde sofort ein Jog-Telegramm gesendet.
+
+Empfehlung: Status an Verbindungssitzung und Empfangszeit koppeln; beim
+Verbindungswechsel ungültig machen und erst nach frischem Status freigeben.
+
+B4 - Posefehler kann Alarmabfrage verhindern, alter Nullstatus bleibt gültig
+Priorität: hoch | Lokal nachgestellt.
+
+Fundstellen: ui/jog_app.py:243-246 und 273-280; dobot/client.py:154-164.
+Die GUI liest erst die Pose und danach die Alarme. Schlägt die Pose fehl,
+wird get_alarms() gar nicht ausgeführt. Nur get_alarms() setzt last_alarms
+zunächst auf unbekannt. Nach einem Posefehler kann der Client deshalb einen
+alten Nullstatus behalten, während die GUI bereits "Alarmstatus unbekannt"
+anzeigt. Die Simulation ergab null Alarmabfragen und einen weiterhin null
+gesetzten Cache.
+
+Empfehlung: Gesamten Bewegungsstatus bei einem fehlgeschlagenen Statuszyklus
+ungültig machen. Die Alarmdiagnose darf nicht vollständig vom Erfolg der
+Poseabfrage abhängen. Datenalter und Fehlerursache sichtbar anzeigen.
+
+B5 - Neue Alarme und Statusausfälle stoppen laufenden Jog nicht automatisch
+Priorität: hoch | Codebefund; Alarmfall lokal nachgestellt.
+
+Fundstellen: ui/jog_app.py:266-280; dobot/client.py:_reader_loop().
+_apply_status() aktualisiert bei nicht-null Alarmdaten nur die Anzeige.
+_on_status_error() aktualisiert Anzeige und Polling, fordert aber ebenfalls
+keinen Stopp an. Bereits gestarteter Jog wird clientseitig nicht automatisch
+beendet. Bei neuem simuliertem Alarm blieb _jogging=true, Stoppaufrufe=0.
+Ob der reale Controller selbst stoppt, wurde hier nicht geprüft.
+
+Unaufgeforderte Alarmframes ohne wartende Anfrage werden ebenfalls nur
+protokolliert und aktualisieren last_alarms nicht. Das wurde nachgestellt.
+
+Empfehlung: Zentraler Bewegungszustand; Statusverlust und neue Alarmdaten
+führen zu Sperre und bestmöglichem Softwarestopp. Vollständige gültige
+Statusmeldungen auch außerhalb einer wartenden Anfrage verarbeiten.
+
+B6 - Kartesische Jog-Parameter fehlen
+Priorität: mittel bis hoch | Codebefund; Wirkung abhängig vom Controller.
+
+Fundstellen: dobot/client.py:212-216; dobot/protocol.py:11-17.
+Die Oberfläche bietet kartesischen Jog, aber initialisiert nur Gelenkparameter
+mit CMD 70 und gemeinsame Raten mit CMD 72. CMD 71 für kartesische Parameter
+wird weder gesetzt noch gelesen. [Q4] Das galt bereits am 22.10.
+Das Verhalten kann deshalb von früheren Controller-Einstellungen abhängen.
+Das erklärt keine garantierte Störung, ist aber eine plausible Ursache für
+unterschiedliches Verhalten in Gelenk- und kartesischem Modus.
+
+B7 - Antworten werden nur anhand der ID zugeordnet
+Priorität: mittel bis hoch | Lokal nachgestellt.
+
+Fundstelle: dobot/client.py:233-237.
+Der Reader prüft bei der Zuordnung weder Lese-/Schreibbit noch erwartete
+Nutzdatenstruktur. Eine verzögerte Schreibbestätigung zu CMD 20 kann eine
+gerade wartende Alarm-Leseanfrage erfüllen. In der Simulation erhielt der
+Lese-Waiter tatsächlich ctrl=1 und null Datenbytes.
+get_alarms() lehnt diese kurze Antwort anschließend ab, sodass daraus kein
+falscher Nullalarm entsteht; die eigentliche gültige Leseantwort kann dann
+aber keinem passenden Aufruf mehr zugeordnet werden.
+
+Empfehlung: ID, Richtung und Antwortschema gemeinsam prüfen. Nach Timeouts
+auch verspätete Antworten berücksichtigen; dieselbe ID allein identifiziert
+keine bestimmte Anfrage. Schreib- und Leseaktionen derselben ID koordinieren.
+
+B8 - Software-Stopp ist kein nachgewiesener Not-Halt
+Priorität: hoch für weitere Bewegungstests | Codebefund.
+
+Fundstellen: ui/jog_app.py:_e_stop(), _bind_hold();
+dobot/client.py:166-187.
+Die Schaltfläche "NOT-HALT" sendet Jog-Stopp in beiden Koordinatenräumen und
+Queue-Löschen über dieselbe Netzwerkverbindung. Weder Stillstand noch eine
+sicherheitsgerichtete Abschaltung werden dadurch nachgewiesen. Der Versand
+kann bei gestörter Verbindung scheitern.
+
+Die Tasten besitzen nur Press-/Release-Bindungen. Es gibt keinen zusätzlichen
+programmierten Stopp bei Fokusverlust oder eine zentrale Überwachung der
+Haltebedingung. Die tatsächliche Ereigniszustellung von Tk unter Windows
+wurde hier nicht untersucht; ein konkreter verlorener Release ist daher
+keine nachgewiesene Ursache deiner Beobachtung.
+
+Empfehlung: Anzeige als Software-Stopp benennen; vorhandenen physischen
+Not-Halt unabhängig verwenden. Fokusverlust und Statusausfall behandeln.
+Mit Herstellerinformationen klären, ob ein controllerseitiger Watchdog
+verfügbar ist. Eine zeitlich begrenzte Softwarewartezeit garantiert bei
+Absturz oder Verbindungsverlust keine maximale reale Bewegungsdauer.
+
+B9 - Neuer Z-Test bestätigt nur J3-Vorzeichen, nicht die gesamte Hubbewegung
+Priorität: mittel | Lokal nachgestellt.
+
+Fundstelle: tools/direct_z.py:76-100.
+delta_z wird berechnet und ausgegeben, aber nicht als Erfolgskriterium genutzt.
+Der Test besteht, wenn J3 mindestens 0,01 in der gewünschten Richtung ändert
+und die Alarmbytes unverändert bleiben. Mit künstlich verändertem J3 und
+unverändertem kartesischem Z wurde "Bewegung abgeschlossen" ausgegeben.
+
+Empfehlung: Zeitlich frische Posewerte, Plausibilität zwischen Z und J3 und
+eine Phase bis zum nachgewiesenen Stillstand prüfen. Die feste Wartezeit
+von 0,1 s nach dem Stopp ist kein Stillstandsnachweis. Sichtbeobachtung bleibt
+für erste Gerätetests notwendig. Die im Code erlaubten 50-250 ms begrenzen
+nur das geplante Zeitfenster bis zum Senden des Stopps.
+
+B10 - Alarminterpretation des Referenzprojekts ist nur bedingt übertragbar
+Priorität: mittel | Fremdcode geprüft, Gerätezuordnung offen.
+
+Die README verweist auf HarvestX/dobot_m1. Dessen AlarmStateToCode sucht das
+erste nicht-null Byte, darin das höchstwertige gesetzte Bit und addiert 1.
+Für Byteindex 8 mit Wert 0x25 liefert diese Funktion 0x46, bezeichnet als
+ERR_LIMIT_AXIS4_POS. Sie meldet dabei weder alle gesetzten Bits noch alle
+nicht-null Bytes.
+
+0x25 hat drei gesetzte Bits. Dieser eine Rückgabewert kann daher weder die
+gesamte Alarmantwort erklären noch eine gesicherte Diagnose "Z unten" liefern.
+Die zusätzliche Eins in der Referenzfunktion muss mit der Hersteller-
+nummerierung geprüft werden; nicht ungeprüft als universellen Decoder kopieren.
+Rohbytes vollständig erhalten und alle Bits unter dokumentierter Nummerierung
+auswerten. Referenzstand und Quellen stehen in Abschnitt 11.
+
+B11 - Weitere Grenzen der Diagnose
+Priorität: mittel/niedrig | Codebefunde, keine belegten Gerätefehler.
+
+- FrameLogger kürzt Rohhex auf 80 Bytes. Bei größeren zusammengefassten
+  Nachrichten bleibt das Log unvollständig. Für spätere Fehleranalyse sind
+  vollständige Rohdaten sowie getrennte Frame-/Nachrichten-Grenzen besser.
+- parse_frames() hält keine Reste zwischen separaten WebSocket-Nachrichten.
+  Falls der Server ein Dobot-Paket über mehrere solche Nachrichten verteilt,
+  gingen Daten verloren. WebSocket-interne Fragmentierung wird bereits von
+  der Bibliothek zusammengesetzt; sie ist nicht dasselbe Problem. Für das
+  tatsächliche Serververhalten fehlt ein Beleg.
+- Ein beschädigtes Längenfeld vor einem gültigen Frame kann die Suche vorzeitig
+  beenden. Das ist ein Robustheitsthema, kein nachgewiesener Anlagenfehler.
+- websockets>=12.0 hat keine Obergrenze und keine reproduzierbare Versionsdatei.
+  Die heute geprüfte Kombination war Python 3.12.14 mit websockets 17.3.
+- Geschwindigkeitswerte werden nicht systematisch begrenzt und zurückgelesen.
+  Der GUI-Regler erlaubt bis 80 Prozent. Seine Stellung kann nach erneutem
+  Verbinden von den im Controller neu gesetzten 10 Prozent abweichen.
+- Mögliche spät eintreffende GUI-Callbacks nach Trennen/Neuverbinden besitzen
+  keine Sitzungskennung. Alte Ergebnisse sollten nicht die neue Verbindung
+  aktualisieren können.
+
+B12 - Pauschale Alarmsperre ist noch keine gezielte Fehlerbehandlung
+Priorität: mittel | Codebefund.
+
+Der heutige Client sperrt bei jedem nicht-null Alarmbyte sämtliche neuen
+Jog-Richtungen. Das verhindert Bewegung bei unbekannter Alarmursache, erlaubt
+aber auch keine gezielt vom Hersteller vorgesehene Rückzugsbewegung aus einer
+Richtungsgrenze. Es fehlt dafür eine verifizierte Unterscheidung zwischen
+Antriebsfehler, Grenzmeldung und zulässigem Wiederanlauf. Diese Sperre nicht
+blind entfernen; zuerst Alarmbedeutung und zulässigen Wiederanlauf klären.
+
+7. WAS DIE SYMPTOME ERKLÄREN KANN - UND WAS OFFENBLEIBT
+====================================================
+
+Z fährt nicht abwärts:
+  Die alte lokale Sperre A1 ist ein konkreter Kandidat. Voraussetzung ist,
+  dass der entsprechende alte Alarmcache das Bit 0x20 enthielt.
+  Originaldaten fehlen. Eine echte Grenze oder ein Controllerfehler bleibt
+  ebenfalls möglich.
+
+Z fährt weder hoch noch herunter:
+  A1 reicht als Erklärung nicht. Zu prüfen sind Modusannahme, gültige
+  Einstellungen, vollständiger Alarmstatus, Referenzzustand und realer
+  Antriebsstatus. Ein Hardware- oder Bremsenproblem ist aus dem Repository
+  weder zu bestätigen noch auszuschließen.
+
+Arm fährt nur in eine Richtung:
+  Die Plus-/Minuszuordnung im alten und heutigen Code ist konsistent.
+  Auch die Tastenbindungen zeigen keinen offensichtlichen Fehler, der Minus
+  grundsätzlich in Plus umwandelt. Ein Vorzeichenfehler ist daher nicht
+  nachgewiesen. Kartesische Grenzen, Singularität, Gelenkgrenzen, ungeprüfte
+  Parameter oder controllerseitig abgelehnte Befehle sind Prüfoptionen.
+  Entscheidend ist, ob das damals in Gelenk- oder kartesischem Modus auftrat.
+
+Verbindung steht, Steuerung funktioniert aber nicht:
+  Die Architektur kann genau diesen Zustand anzeigen: erfolgreicher Handshake
+  und erfolgreiches Senden reichen im bisherigen Programm aus, obwohl keine
+  Annahme der Einstellungen oder Bewegung bestätigt wurde.
+
+Die alte README behauptete eine Cold-Boot-/J3-Nullpunkt-Firmwarefalle. Dafür
+liegt in diesem Repository kein belastbarer Nachweis vor. Diese Aussage darf
+nicht zur Grundlage eines automatischen Referenzsetzens oder eines Wechsels
+in einen anderen Betriebsmodus werden. Im heutigen Text wurde sie entfernt.
+
+8. ERGEBNISSE DER LOKALEN PRÜFUNGEN
+=================================
+
+Bestehende Tests: 26 ausgeführt, 26 bestanden.
+Laufzeit des erfolgreichen Durchlaufs: ca. 0,54 s.
+Laufzeitumgebung: Windows, Python 3.12.14, websockets 17.3.
+Aufruf im Projektordner: python -m unittest discover -s tests -v
+
+Die Tests simulieren Verbindungen. Es wurde keine Verbindung zur Anlagen-IP
+aufgebaut. Ein bestandener Test ist kein Hardware-Funktionstest.
+
+Zusätzliche gezielte Simulationen:
+- Alter Parser auf 76-Byte-Pose+Alarm: nur CMD 10; aktueller Parser: 10 und 20.
+- Alte Z-Maske mit 0x25: würde Abwärtsrichtung sperren.
+- Nullalarmcache nach close(): weiterhin vorhanden.
+- Neue simulierte Verbindung ohne neue Alarmabfrage: Jog wurde gesendet.
+- Unaufgeforderter nicht-null Alarm: Cache blieb unverändert null.
+- Schreib-ACK CMD 20: erfüllte fälschlich einen Lese-Waiter.
+- Posefehler im GUI-Statuszyklus: Alarmabfragen=0, alter Cache blieb null.
+- Neue Alarmdaten bei laufendem Jog: Stoppaufrufe=0, Jogging-Flag blieb wahr.
+- Initialisierung ohne eine einzige Antwort: erfolgreich zurückgekehrt.
+- Z-Test mit steigendem J3, unverändertem Z: meldete Erfolg.
+
+Diese Prüfungen zeigen konkret, welche Eigenschaften im Code fehlen. Sie
+beweisen nicht, dass genau diese Situationen am 22.10. aufgetreten sind.
+Das beiliegende Quellenpaket enthält das verwendete zusätzliche Prüfskript
+und seine Ergebnisse, getrennt vom unveränderten Repository-Snapshot.
+
+9. EMPFOHLENE UMSETZUNGSREIHENFOLGE
+=================================
+
+Schritt 1 - Kleine reine Leseanwendung
+  TCP/WebSocket getrennt diagnostizieren. Pose, rohe Alarme, Datenalter und
+  soweit verfügbar Geräte-/Firmware-/Betriebsstatus auslesen. Unveränderte
+  Rohframes vollständig speichern. Beim Verbinden keine Einstellungen
+  verändern und keine Alarme löschen. tools/probe.py ist dafür ein möglicher
+  Ausgangspunkt; DobotClient.connect() ist derzeit nicht rein lesend.
+  M1Studio ist für diesen Entwicklungsschritt keine Voraussetzung.
+
+Schritt 2 - Befehls- und Zustandsmodell korrigieren
+  Frische sitzungsgebundene Daten verlangen. Fehlerzustand und Bereitschaft
+  ausdrücklich darstellen. Lesen und Schreiben passend zuordnen. Einstellungen
+  bestätigen und zurücklesen. Alarmlöschformat korrigieren, ohne es automatisch
+  beim Start zu verwenden. Alarmdiagnose vom Pose-Erfolg entkoppeln.
+
+Schritt 3 - Softwarestopp und Fehlerfälle testen
+  Neue Alarme, Statusverlust, Verbindungsabbruch, Fokusverlust und Trennen
+  müssen konsistente Zustandsübergänge auslösen. Softwarestopp und tatsächlichen
+  Stillstand unterscheiden. Zuerst mit künstlichen Antworten überprüfen.
+
+Schritt 4 - Einzelne Gelenke am Gerät prüfen
+  Erst wenn Controllerzustand und Arbeitsbereich geklärt sind: einzelne kurze
+  Bewegungen jeweils pro Achse und Richtung, mit Vorher-/Nachher-Pose,
+  vollständigen Alarmdaten und aufgezeichneter Antwort. Kein gleichzeitiges
+  Joggen mehrerer Programme. Das ist ein späterer Arbeitsschritt, kein Ergebnis
+  dieser Analyse. Vorhandenen physischen Not-Halt verwenden.
+
+Schritt 5 - Kartesischen Modus ergänzen
+  CMD-71-Parameter einbinden und zurücklesen. Ausgangspose, Gelenkgrenzen und
+  kartesische Erreichbarkeit berücksichtigen. Jede Richtung separat prüfen.
+
+Schritt 6 - Bedienoberfläche ausbauen
+  Erst auf der nachgewiesenen Steuerungsgrundlage: klare Meldungen, bestätigte
+  Einstellungen, verständliche Achsen-/Einheitenanzeige und reproduzierbare
+  Start-/Stoppabläufe. PTP oder automatische Abläufe folgen später.
+
+Wichtige Regressionstests für diese Umsetzung:
+  Alte Alarmdaten nach Wiederverbinden, Posefehler bei altem Nullstatus,
+  verspätete Schreibbestätigung, unaufgeforderter Alarm, Alarm während Jog,
+  fehlende Initialisierungsantwort, Parameter-Rücklesefehler und Stoppnachweis.
+
+10. NOCH BENÖTIGTE INFORMATIONEN
+==============================
+
+Für den nächsten praktischen Schritt wären besonders hilfreich:
+- Typenschild/Steuerungsvariante und Firmwarestand, soweit ablesbar.
+- Die tatsächlich verwendete URI und die Python-/websockets-Version des
+  funktionierenden Verbindungsversuchs.
+- Der lokal ausgeführte Stand: stimmt er exakt mit Commit 8aa03bc überein
+  oder gab es zusätzliche ungespeicherte Änderungen?
+- Waren die einseitigen Armbewegungen im Gelenk- oder kartesischen Modus?
+  Welche Achsen und welche Richtung funktionierten jeweils?
+- Alte oder neue vollständige logs/jog.jsonl und logs/probe.jsonl.
+- Ausgangspose samt allen 32 Alarmbytes nach Einschalten, ohne vorheriges
+  automatisches Alarmlöschen.
+- Ob eine Referenzierung schon durchgeführt wurde und wie sie erfolgte.
+
+M1Studio muss dafür nicht vorab installiert werden. Falls die Installation
+später untersucht wird, ist die konkrete Fehlermeldung aussagekräftiger als
+die Annahme, die Robotersteuerung selbst sei defekt.
+
+11. QUELLEN UND FESTE CODEFUNDSTELLEN
+===================================
+
+Eigener Code, aktueller geprüfter Stand:
+https://github.com/Koscher9/DobotM1/tree/7426c4a7621b4f9f936ad76a9bc84702ab92961a
+
+Client:
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/dobot/client.py#L134
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/dobot/client.py#L146
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/dobot/client.py#L212
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/dobot/client.py#L218
+
+Protokoll und GUI:
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/dobot/protocol.py
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/ui/jog_app.py#L239
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/tools/direct_z.py#L76
+https://github.com/Koscher9/DobotM1/blob/7426c4a7621b4f9f936ad76a9bc84702ab92961a/tools/probe.py
+
+Alter Stand und Änderungen:
+https://github.com/Koscher9/DobotM1/tree/8aa03bc4c978722426c27cfff8659bd2b16937db
+https://github.com/Koscher9/DobotM1/blob/8aa03bc4c978722426c27cfff8659bd2b16937db/dobot/client.py
+https://github.com/Koscher9/DobotM1/blob/8aa03bc4c978722426c27cfff8659bd2b16937db/dobot/protocol.py
+https://github.com/Koscher9/DobotM1/commit/7426c4a7621b4f9f936ad76a9bc84702ab92961a
+
+Herstellerquellen:
+[Q1] M1 Communication Protocol V1.1, Abschnitt SetJOGCmd, gedruckte Seite 21.
+     Richtungscodes und isJoint.
+https://download.dobot.cc/development-protocol/dobot-m1/pdf/en/Dobot-M1-Communication-Protocol-V1.1.pdf
+
+[Q2] M1 Communication Protocol V1.0, ClearAllAlarmsState, Tabellen 21/22,
+     gedruckte Seite 9. Schreibende CMD 20 mit leerer Nutzlast.
+https://download.dobot.cc/development-protocol/dobot-m1/pdf/en/Dobot-M1-Communication-Protocol-V1.0.pdf
+
+[Q3] M1 Alarm Description V1.0, 30.06.2019, Abschnitte 1.1 und 1.3.
+     Alarmbits und Alarmcode-Enum; kein verifizierter gerätespezifischer Decoder.
+https://download.dobot.cc/development-protocol/dobot-m1/pdf/alarms/en/Dobot-M1-Alarm-Description.pdf
+
+[Q4] M1 Communication Protocol V1.0, Get/SetJOGCoordinateParams,
+     gedruckte Seite 18; CMD 71 für kartesische Jog-Parameter.
+     Gleicher Link wie Q2.
+
+[Q5] M1 API Description, Alarm-/Homing-Abschnitte.
+https://download.dobot.cc/development-protocol/dobot-m1/pdf/en/Dobot-M1-API-Description.pdf
+
+Die Hersteller-PDFs waren im Web-Suchindex abschnittsweise lesbar. Der direkte
+Abruf vollständiger Protokoll-PDFs scheiterte am Webdienst. Die Analyse stützt
+sich deshalb bei diesen Quellen auf die konkret aufgefundenen Abschnitte,
+nicht auf eine behauptete vollständige PDF-Prüfung. Versionsunterschiede und
+redaktionelle Fehler sind möglich: Beispielsweise nennt Tabelle 20 der
+indexierten V1.1 bei der Alarmantwort ID 11 statt der Anfrage-ID 20. Solche
+Widersprüche müssen mit echten Telegrammen abgeglichen werden.
+
+Geprüfter Referenzcode von HarvestX, Stand:
+a6a8b2bcadf1052a9cbc8351b31544257270a4c5
+https://github.com/HarvestX/dobot_m1/blob/a6a8b2bcadf1052a9cbc8351b31544257270a4c5/m1_controller/include/DobotDll/DobotType.h
+https://github.com/HarvestX/dobot_m1/blob/a6a8b2bcadf1052a9cbc8351b31544257270a4c5/m1_controller/include/dobot_m1/dobot_m1_alarm.hpp
+https://github.com/HarvestX/dobot_m1/blob/a6a8b2bcadf1052a9cbc8351b31544257270a4c5/m1_controller/src/dobot_m1_alarm.cpp
+
+Diese ROS-/C++-Implementierung ist als Vergleich nützlich. Ihre Existenz
+bestätigt nicht automatisch die Kompatibilität mit deiner Steuerung.
+M1-Pro-/aktuelle ASCII-TCP-Beispiele sind ohne Schnittstellenabgleich keine
+austauschbare Grundlage für dieses binäre WebSocket-Projekt.
+
+12. ARBEITSSTAND, DATEIEN UND REPOSITORY-SICHTBARKEIT
+==================================================
+
+Es wurden keine Codeänderungen, Issues, Kommentare oder Commits auf GitHub
+angelegt. Sämtliche Prüfungsergebnisse sind lokal entstanden.
+
+Die Textdatei ist die eigenständig lesbare Auswertung. Das zusätzliche ZIP
+enthält den vollständigen aktuellen Quellstand, ausgewählte Originaldateien
+des alten Stands und die lokalen Nachweise. Es enthält keine Original-
+Roboterlogs, keine installierten Bibliotheken und keine Zugangsdaten.
+
+Die private Sichtbarkeit konnte nicht wiederhergestellt werden:
+- Die verfügbare GitHub-Anbindung stellt keine Funktion zur Änderung der
+  Repository-Sichtbarkeit bereit.
+- Die lokale GitHub-CLI ist nicht angemeldet.
+- Der verfügbare Browser ist bei GitHub ebenfalls nicht angemeldet.
+Das Repository war bei der Zugriffsprüfung öffentlich. Der Code ist lokal
+gesichert; du kannst es wieder privat stellen. Ein späterer Onlinezugriff
+benötigt dann die entsprechende Repository-Freigabe für die Verbindung.
+
+Empfohlener nächster Entwicklungsschritt: eine kleine reine Leseanwendung
+mit vollständigen Rohlogs und klarer Trennung von Verbindung, gültigem Status
+und bestätigter Steuerungsbereitschaft. Die hier belegten Fehler bilden dafür
+die konkrete Arbeitsliste.
